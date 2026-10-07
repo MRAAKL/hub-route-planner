@@ -1,11 +1,3 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-</head>
-<body>
 <title>Route Planner</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -66,7 +58,7 @@ button{font-family:inherit}
 .crumb b{color:var(--ink);font-weight:500}
 .crumb .sep{color:var(--line2)}
 .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.tabs{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}
 .tab{appearance:none;border:0;background:transparent;color:var(--muted);padding:12px 8px;font-size:14px;font-weight:500;cursor:pointer;display:flex;gap:8px;align-items:center;justify-content:center;border-bottom:2px solid transparent;margin-bottom:-1px}
 .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
 .tab[disabled]{opacity:.45;cursor:not-allowed}
@@ -398,8 +390,9 @@ function buildStops(files){
   const cbm=os.reduce((a,o)=>a+o.cbm,0);
   const base=tpl?clone(tpl):{id:'U'+(++u),cust:'GroupeSeb',name:os[0].name,area:'Not on master list',lat:WH.lat,lng:WH.lng,noloc:true,addrSrc:'missing',addr:'Not on master list',flags:['noaddr','newship'],
    raw:(dels[0]||os[0]).remarks,read:win?'Window read from the remarks: '+winText({win})+'.':'No time window found in the remarks.'};
-  const s=Object.assign(base,{n:os.length,cbm:Math.round(cbm*1000)/1000,types,win:win||(tpl?tpl.win:null),maxH:maxH||undefined});
+  const s=Object.assign(base,{code:os.map(o=>o.code).find(x=>x!=null&&x!=='')||undefined,n:os.length,cbm:Math.round(cbm*1000)/1000,types,win:win||(tpl?tpl.win:null),maxH:maxH||undefined});
   s.flags=s.flags.filter(f=>f!=='mixed'&&f!=='coll');
+  {const be=bookGet(s.cust,s.name,s.code);if(be&&be.addr&&s.addrSrc!=='order'){s.addr=be.addr;s.addrSrc='saved';s.flags=s.flags.filter(f=>f!=='newship');s.fromBook=true;}}
   if(types.length>1)s.flags.push('mixed');else if(types[0]==='Collection')s.flags.push('coll');
   if(maxH&&!s.flags.includes('height'))s.flags.push('height');
   stops.push(s);orders[s.id]=os;}
@@ -489,6 +482,123 @@ function vehicleNeed(cbm,height){
  if(!height){const tr=trailerTypes().find(t=>pv(t)>=cbm-1e-9);if(tr)return tr.name+' with a prime mover (up to '+pv(tr)+' m³)';}
  return null;}
 
+/* ---------- saved ship-to list (kept in this browser, shareable as Excel) ---------- */
+const BKEY='hub_shipto_book_v1';let BOOK={};let bookOk=true;
+try{BOOK=JSON.parse(localStorage.getItem(BKEY)||'{}')||{}}catch(e){bookOk=false;BOOK={}}
+const bkey=(c,n)=>norm(c)+'|'+norm(n);
+let CIDX=null;
+function codeIdx(){if(!CIDX){CIDX={};for(const [k,v] of Object.entries(BOOK)){if(v&&v.code)CIDX[norm(v.cust)+'|'+String(v.code)]=k}}return CIDX}
+function bookKeyOf(c,n,code){if(code!=null&&code!==''){const k=codeIdx()[norm(c)+'|'+String(code).trim()];if(k&&BOOK[k])return k}return bkey(c,n)}
+function bookGet(c,n,code){return BOOK[bookKeyOf(c,n,code)]||null}
+function bookSave(){CIDX=null;try{localStorage.setItem(BKEY,JSON.stringify(BOOK));return true}catch(e){bookOk=false;return false}}
+function bookPut(c,n,patch){const k=bookKeyOf(c,n,patch&&patch.code);BOOK[k]=Object.assign({cust:c,name:n},BOOK[k]||{},patch,{saved:new Date().toISOString().slice(0,10),by:SYNC.name||''});const ok=bookSave();syncPush([{key:k,entry:BOOK[k]}]);return ok;}
+function applyBook(){
+ for(const s of Object.values(S)){const e=bookGet(s.cust,s.name,s.code);if(!e)continue;
+  if(s.flags.includes('noaddr')&&e.addr&&s.addrSrc!=='order')state.resolved[key(s.id,'noaddr')]={ok:true,text:e.addr,book:true};
+  if(s.flags.includes('postal')&&e.postal)state.resolved[key(s.id,'postal')]={ok:true,text:e.postal,book:true};
+  else if(s.flags.includes('postal')&&e.addr&&/\b\d{6}\b/.test(e.addr))state.resolved[key(s.id,'postal')]={ok:true,text:(e.addr.match(/\b\d{6}\b/)||[''])[0],book:true};}}
+function bookRows(){return Object.entries(BOOK).map(([k,v])=>Object.assign({k},v)).sort((a,b)=>(a.cust+a.name).localeCompare(b.cust+b.name));}
+function bookDownload(){
+ if(typeof XLSX==='undefined'){toast('The Excel writer did not load.');return}
+ const rows=[['Customer','Ship-to name','Address','Postal code','Saved on']].concat(bookRows().map(r=>[r.cust,r.name,r.addr||'',r.postal||'',r.saved||'']));
+ const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=[{wch:16},{wch:44},{wch:60},{wch:12},{wch:12}];
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Ship-to list');XLSX.writeFile(wb,'Hub_Ship-to_List.xlsx');}
+async function bookLoad(f){
+ try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+  const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames.find(n=>/ship/i.test(n))||wb.SheetNames[0]],{header:1,raw:true,defval:null,blankrows:false});
+  const hi=rows.findIndex(r=>r&&r.some(c=>String(c||'').trim().toLowerCase()==='ship-to name'));
+  if(hi<0)return {error:'No "Ship-to name" column found. Use the list downloaded from this page.'};
+  const h=rows[hi].map(c=>String(c==null?'':c).trim().toLowerCase());const ix=k=>h.findIndex(x=>x.startsWith(k));
+  const c={c:ix('customer'),n:ix('ship-to'),a:ix('address'),p:ix('postal')};let add=0,upd=0,skip=0;
+  for(const r of rows.slice(hi+1)){const cu=String(r[c.c]==null?'':r[c.c]).trim(),nm=String(r[c.n]==null?'':r[c.n]).trim();
+   const ad=c.a>=0&&r[c.a]!=null?String(r[c.a]).trim():'',po=c.p>=0&&r[c.p]!=null?String(r[c.p]).trim():'';
+   if(!cu||!nm||(!ad&&!po)){skip++;continue}
+   const had=!!bookGet(cu,nm);const patch={};if(ad)patch.addr=ad;if(po)patch.postal=po;bookPut(cu,nm,patch);had?upd++:add++;}
+  return {add,upd,skip};
+ }catch(e){return {error:'This file could not be read as a ship-to list.'}}}
+
+
+/* ---------- BP Master import (ship-to master from the GSS macro file) ---------- */
+const BP_CUST='GroupeSeb';
+function bpPostal(z){const d=String(z==null?'':z).replace(/\D/g,'');return d.length===5?'0'+d:d.length===6?d:'';}
+function bpAddr(r,ix,postal){
+ const parts=[];for(const i of [ix.street,ix.block,ix.city]){if(i<0)continue;let v=String(r[i]==null?'':r[i]).replace(/\s+/g,' ').trim().replace(/^[,\s]+|[,\s]+$/g,'');
+  if(!v||/^singapore$/i.test(v))continue;
+  const lv=v.toLowerCase();if(parts.some(p=>p.toLowerCase().includes(lv)))continue;
+  for(let j=parts.length-1;j>=0;j--)if(lv.includes(parts[j].toLowerCase()))parts.splice(j,1);
+  parts.push(v);}
+ if(!parts.length)return '';
+ let a=parts.join(', ');if(postal&&!a.replace(/\s/g,'').includes(postal))a+=', Singapore '+postal;else if(!postal&&!/singapore/i.test(a))a+=', Singapore';
+ return a;}
+async function bpImport(f){
+ try{if(typeof XLSX==='undefined')return {error:'The Excel reader did not load. Reload the page and try again.'};
+  const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+  let rows=null,hi=-1;
+  for(const sn of [...wb.SheetNames.filter(n=>/bp\s*master/i.test(n)),...wb.SheetNames.filter(n=>!/bp\s*master/i.test(n))]){
+   const rr=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null,blankrows:false});
+   const i=rr.slice(0,10).findIndex(r=>r&&r.some(c=>String(c||'').trim().toLowerCase()==='bp code')&&r.some(c=>/ship-to street/i.test(String(c||''))));
+   if(i>=0){rows=rr;hi=i;break}}
+  if(!rows)return {error:'No BP Master sheet found. It needs the columns "BP Code" and "Ship-to Street".'};
+  const h=rows[hi].map(c=>String(c==null?'':c).trim().toLowerCase());const f1=k=>h.findIndex(x=>x.startsWith(k));
+  const ix={code:f1('bp code'),name:f1('bp name'),street:f1('ship-to street'),block:f1('ship-to block'),city:f1('ship-to city'),zip:f1('ship-to zip'),method:f1('method to book'),pod:f1('type of pod')};
+  const seen=new Map();const r0={read:0,dupSame:0,dupDiff:[],noPostal:[],padded:0,dummy:[],noAddr:[],ok:0};
+  for(const r of rows.slice(hi+1)){
+   const code=String(r[ix.code]==null?'':r[ix.code]).trim(),name=String(r[ix.name]==null?'':r[ix.name]).replace(/\s+/g,' ').trim();
+   if(!code||!name)continue;r0.read++;
+   const raw=String(r[ix.zip]==null?'':r[ix.zip]).replace(/\D/g,'');const postal=bpPostal(r[ix.zip]);if(raw.length===5)r0.padded++;
+   const addr=bpAddr(r,ix,postal);
+   const t=v=>v==null?'':String(v).replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n\s*/g,'\n').trim();
+   const e={cust:BP_CUST,name,addr,postal,code:/^(\d)\1+$/.test(code)?'':code,method:t(r[ix.method]),pod:t(r[ix.pod])};
+   if(/^(\d)\1+$/.test(code))r0.dummy.push(name);
+   if(!addr&&!postal){r0.noAddr.push(name);continue}
+   const k=bkey(BP_CUST,name);
+   if(seen.has(k)){const o=seen.get(k);if(o.addr===e.addr&&o.postal===e.postal)r0.dupSame++;else r0.dupDiff.push(name);continue}
+   seen.set(k,e);if(!postal)r0.noPostal.push(name);}
+  const items=[];let add=0,upd=0;
+  for(const [k,e] of seen){const had=!!BOOK[k];
+   BOOK[k]=Object.assign({},BOOK[k]||{},e,{saved:new Date().toISOString().slice(0,10),by:SYNC.name||''});
+   if(!e.code)delete BOOK[k].code;
+   had?upd++:add++;items.push({key:k,entry:BOOK[k]});}
+  bookSave();const up=syncPush(items);
+  return Object.assign(r0,{add,upd,total:seen.size,pushed:!!(SYNC.code&&SYNC.status!=='none'&&SYNC.status!=='bad'),wait:up});
+ }catch(e){return {error:'This file could not be read as a BP Master.'}}}
+
+/* ---------- shared list (needs the api/shiptos function and its storage; one shared access code) ---------- */
+let SYNC={code:'',name:'',status:'off',msg:''};
+try{Object.assign(SYNC,JSON.parse(localStorage.getItem('hub_sync_v1')||'{}'))}catch(e){}
+SYNC.status=SYNC.code?'wait':'off';
+const syncKeep=()=>{try{localStorage.setItem('hub_sync_v1',JSON.stringify({code:SYNC.code,name:SYNC.name}))}catch(e){}};
+async function sapi(method,qs,body){
+ const r=await fetch('/api/shiptos'+(qs||''),{method,headers:{'x-access-code':SYNC.code,'Content-Type':'application/json'},body:body?JSON.stringify(Object.assign({by:SYNC.name},body)):undefined});
+ let j={};try{j=await r.json()}catch(e){}
+ return {ok:r.ok,status:r.status,j};}
+function syncFail(r){
+ if(r.status===401){SYNC.status='bad';SYNC.msg='The access code was not accepted.'}
+ else if(r.status===404||r.status===405){SYNC.status='none';SYNC.msg='The shared list is not set up on this copy of the page.'}
+ else if(r.status===500){SYNC.status='none';SYNC.msg='The shared list is not finished setting up (storage or access code missing).'}
+ else{SYNC.status='err';SYNC.msg='Could not reach the shared list. Changes are kept on this computer for now.'}}
+async function syncPush(items){
+ if(!SYNC.code||SYNC.status==='bad'||SYNC.status==='none')return;
+ try{for(let i=0;i<items.length;i+=100){const r=await sapi('POST','',{items:items.slice(i,i+100)});if(r.ok){SYNC.status='ok';SYNC.msg=''}else{syncFail(r);break}}}catch(e){SYNC.status='err';SYNC.msg='Could not reach the shared list. Changes are kept on this computer for now.'}
+ if(state.step==='shipto')render();}
+async function syncPull(){
+ if(!SYNC.code){SYNC.status='off';return}
+ try{const r=await sapi('GET');
+  if(!r.ok){syncFail(r);return}
+  const rem=r.j.entries||{};let got=0;
+  for(const [k,v] of Object.entries(rem)){const l=BOOK[k];if(!l||l.addr!==v.addr||l.postal!==v.postal||l.by!==v.by||l.pod!==v.pod||l.method!==v.method||l.code!==v.code){BOOK[k]=v;got++}}
+  bookSave();
+  const up=Object.entries(BOOK).filter(([k])=>!rem[k]).map(([k,v])=>({key:k,entry:v}));
+  for(let i=0;i<up.length;i+=100){const w=await sapi('POST','',{items:up.slice(i,i+100)});if(!w.ok){syncFail(w);return}}
+  SYNC.status='ok';SYNC.msg=got?`Loaded ${got} from the shared list.`:'';SYNC.n=Object.keys(BOOK).length;
+ }catch(e){SYNC.status='err';SYNC.msg='Could not reach the shared list. Using this computer\'s copy.'}}
+function seedBuiltIn(){
+ const items=[];
+ for(const s of STOPS){if(s.cust!=='GroupeSeb'||s.addrSrc!=='master'||/postal code 0/.test(s.addr))continue;
+  const k=bkey(s.cust,s.name);if(BOOK[k])continue;
+  BOOK[k]={cust:s.cust,name:s.name,addr:s.addr,postal:(s.addr.match(/S\((\d{6})\)/)||[])[1]||'',saved:new Date().toISOString().slice(0,10),by:SYNC.name||''};items.push({key:k,entry:BOOK[k]});}
+ bookSave();if(items.length)syncPush(items);return items.length;}
+
 /* ---------- icons ---------- */
 const ic=p=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const ICON={
@@ -496,6 +606,7 @@ const ICON={
  file:ic('<path d="M4 1.8h5l3 3V14H4z"/><path d="M9 1.8v3h3"/>'),
  route:ic('<circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><path d="M5.6 12H10a2 2 0 0 0 0-4H6a2 2 0 0 1 0-4h4.4"/>'),
  check:ic('<path d="M3 8.5l3 3 7-7"/>'),
+ pin:ic('<path d="M8 14.5s4.5-4 4.5-8a4.5 4.5 0 0 0-9 0c0 4 4.5 8 4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/>'),
  truck:ic('<path d="M1.5 4h8v7h-8z"/><path d="M9.5 6.5h3l2 2.2V11h-5z"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/>'),
  box:ic('<path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3 6-3M8 8v6"/>')};
 const ICON_X=0;const CUSTOMERS=['GroupeSeb','P&G',"L'Oréal",'Chagee','Meiji','Lion','NMB','Johnson & Johnson'];
@@ -511,7 +622,7 @@ function ordersRowsHtml(sm){
  const q=norm(state.q);const known=s=>!!KNOWN[norm(s)];
  const all=sm.ok.flatMap(f=>f.orders.map(o=>Object.assign({file:f.name},o)));
  const rows=all.filter(o=>!q||norm([o.cust,o.doc,o.name,o.date,o.type,o.remarks].join(' ')).includes(q));
- return {n:rows.length,total:all.length,html:rows.map(o=>`<tr><td>${esc(o.cust||'')}</td><td class="mono nw">${esc(o.doc)}</td><td><div class="nm">${esc(o.name)}</div>${known(o.name)?'':'<span class="chip warn">New ship-to</span>'}</td><td class="nw">${esc(niceDate(o.date)||'')}</td><td><span class="chip ${o.type==='Collection'?'info':''}">${o.type}</span></td><td class="num">${o.qty}</td><td class="num">${o.cbm.toFixed(3)}</td><td>${esc(o.remarks)}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No orders match that search.</td></tr>'};}
+ return {n:rows.length,total:all.length,html:rows.map(o=>`<tr><td>${esc(o.cust||'')}</td><td class="mono nw">${esc(o.doc)}</td><td><div class="nm">${esc(o.name)}</div>${known(o.name)||bookGet(o.cust,o.name)?'':'<span class="chip warn">New ship-to</span>'}</td><td class="nw">${esc(niceDate(o.date)||'')}</td><td><span class="chip ${o.type==='Collection'?'info':''}">${o.type}</span></td><td class="num">${o.qty}</td><td class="num">${o.cbm.toFixed(3)}</td><td>${esc(o.remarks)}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No orders match that search.</td></tr>'};}
 function ordersCard(sm){
  const r=ordersRowsHtml(sm);const dels=sm.ok.reduce((a,f)=>a+f.orders.filter(o=>o.type==='Delivery').length,0);
  return `<div class="kpis">${kpi('Orders',sm.orders,plural(sm.stops.length,'ship-to'))}${kpi('Total volume',m3(sm.cbm)+' m³','across all files')}${kpi('Deliveries',dels,sm.orders-dels?plural(sm.orders-dels,'collection'):'no collections')}${kpi('Customers',new Set(sm.ok.flatMap(f=>f.orders.map(o=>o.cust))).size,plural(sm.ok.length,'file'))}</div>
@@ -546,7 +657,31 @@ function build(){
  const sm=summary();const b=buildStops(sm.ok);
  S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
  state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
- state.routes=groupRoutes(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};state.step='routes';render();window.scrollTo(0,0);}
+ state.routes=groupRoutes(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
+
+/* ---------- ship-to list module ---------- */
+function renderShipto(){
+ const rows=bookRows();
+ const stChip={off:'<span class="chip">Not connected: this list stays on this computer</span>',wait:'<span class="chip warn">Connecting…</span>',ok:'<span class="chip ok">Connected: shared with other managers</span>',bad:'<span class="chip bad">Access code not accepted</span>',none:'<span class="chip bad">Shared list not available</span>',err:'<span class="chip warn">Could not reach the shared list</span>'}[SYNC.status];
+ const share=`<section class="card"><div class="ch">Shared list<small>${stChip}</small></div><div class="asg"><label>Your name<input type="text" id="sname" value="${esc(SYNC.name)}" placeholder="So changes show who made them" autocomplete="off"></label><label>Access code<input type="text" id="scode" value="${esc(SYNC.code)}" placeholder="Ask whoever set this up" autocomplete="off"></label></div><div class="rf"><div class="why">${SYNC.msg?`<span class="chip ${SYNC.status==='ok'?'ok':'bad'}">${esc(SYNC.msg)}</span>`:'<span class="sub">Once connected, every address you save is stored for all managers, and theirs appear here.</span>'}</div><div class="fa"><button class="btn" data-act="syncconnect">Connect</button>${SYNC.code?'<button class="btn ghost" data-act="syncrefresh">Refresh</button><button class="btn ghost" data-act="syncoff">Disconnect</button>':''}<button class="btn ghost" data-act="syncseed">Add the built-in GroupeSeb addresses</button></div></div></section>`;
+ return share+`<section class="drop slim"><h2>Ship-to list</h2><p>Addresses you save while approving routes are kept here, by customer and ship-to name, and filled in next time. Download the list to share it with other managers, or load one a colleague sent.</p><div class="row"><button class="btn" data-act="dlbook"${rows.length?'':' disabled'}>Download as Excel</button><button class="btn ghost" data-act="pickbook">Load a list</button><button class="btn ghost" data-act="pickbp">Import BP Master</button></div>${state.bookMsg?`<span class="chip ${state.bookMsg.bad?'bad':'ok'}">${esc(state.bookMsg.t)}</span>`:''}${bookOk?'':'<span class="chip bad">This browser will not keep the list after you close the tab</span>'}<input type="file" id="bf" class="visually" accept=".xlsx,.xls,.csv" aria-label="Choose a ship-to list"><input type="file" id="bpf" class="visually" accept=".xlsx,.xlsm,.xls" aria-label="Choose the file with the BP Master sheet">${bpReport()}</section>
+ <section class="card"><div class="ch">Saved ship-tos<small id="bkcount">${bookCount(rows)}</small></div><div class="tb"><input type="text" id="bkq" placeholder="Search code, name, address, postal code…" value="${esc(state.bq||'')}" aria-label="Search saved ship-tos"></div>${rows.length?`<div class="scroll" style="max-height:520px"><table><thead><tr><th>Code</th><th>Ship-to</th><th>Address</th><th>Postal code</th><th>Delivery rules</th><th>Saved</th><th>By</th><th></th></tr></thead><tbody id="bkbody">${bookRowsHtml(rows)}</tbody></table></div>`:'<div class="empty"><b>Nothing saved yet.</b><p>When you add an address or postal code on a route, it will appear here.</p></div>'}</section>`;}
+function bookFiltered(rows){const q=norm(state.bq||'');return q?rows.filter(r=>norm([r.code,r.cust,r.name,r.addr,r.postal,r.method,r.pod].join(' ')).includes(q)):rows}
+function bookCount(rows){const f=bookFiltered(rows).length;return f===rows.length?plural(rows.length,'entry').replace('entrys','entries'):f+' of '+rows.length}
+function bookRowsHtml(rows){const f=bookFiltered(rows);const sh=f.slice(0,200);
+ return sh.map(r=>`<tr><td class="mono nw">${esc(r.code||'')}</td><td class="nm">${esc(r.name)}</td><td>${esc(r.addr||'')}</td><td class="mono">${r.postal?esc(r.postal):(r.addr?'<span class="chip warn">missing</span>':'')}</td><td>${r.method||r.pod?'<span class="chip info" title="'+esc([r.method,r.pod].filter(Boolean).join(' | '))+'">Has rules</span>':''}</td><td class="nw">${esc(r.saved||'')}</td><td>${esc(r.by||'')}</td><td><button class="link" data-act="delbook" data-k="${esc(r.k)}">Remove</button></td></tr>`).join('')+(f.length>200?`<tr><td colspan="8" class="muted">Showing the first 200 of ${f.length}. Type in the search box to narrow the list.</td></tr>`:'')||'<tr><td colspan="8" class="muted">No ship-to matches that search.</td></tr>';}
+function bpReport(){const m=state.bpMsg;if(!m)return '';
+ if(m.error)return `<span class="chip bad">${esc(m.error)}</span>`;
+ const li=(a,t)=>a.length?`<li><b>${a.length}</b> ${t}: ${esc(a.slice(0,6).join('; '))}${a.length>6?' …':''}</li>`:'';
+ return `<div class="why"><span class="chip ok">BP Master read: ${m.add} added, ${m.upd} updated (${m.total} ship-tos).${m.pushed?' Sent to the shared list.':' Kept on this computer only: connect the shared list above to share it.'}</span><ul class="sub" style="margin:8px 0 0 18px">${m.padded?`<li><b>${m.padded}</b> five-digit postal codes had a leading 0 added.</li>`:''}${li(m.noPostal,'ship-tos have no postal code (add it on the route when needed)')}${li(m.dummy,'use a dummy code (like 1111111111), so they match by name only')}${m.dupSame?`<li><b>${m.dupSame}</b> repeated rows were merged.</li>`:''}${li(m.dupDiff,'appear twice with different addresses (first one kept; please check)')}${li(m.noAddr,'were skipped: no address at all')}</ul></div>`;}
+function wireShipto(){
+ const bq=document.getElementById('bkq');
+ if(bq)bq.addEventListener('input',()=>{state.bq=bq.value;const rows=bookRows();const b=document.getElementById('bkbody');if(b)b.innerHTML=bookRowsHtml(rows);document.getElementById('bkcount').textContent=bookCount(rows);});
+ const bpf=document.getElementById('bpf');
+ if(bpf)bpf.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;state.bpMsg=null;toast('Reading the BP Master…');const r=await bpImport(f);state.bpMsg=r;render();});
+ const bf=document.getElementById('bf');if(!bf)return;
+ bf.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+  const r=await bookLoad(f);state.bookMsg=r.error?{bad:true,t:r.error}:{t:`Loaded: ${r.add} added, ${r.upd} updated${r.skip?', '+r.skip+' skipped (missing customer, name or address)':''}.`};render();});}
 
 /* ---------- vehicle fleet module ---------- */
 const rng=(x,u)=>x?(x.lo===x.hi?x.lo:x.lo+'–'+x.hi)+(u||''):null;
@@ -605,14 +740,14 @@ function noteChips(s){
  let h='';
  for(const f of s.flags){
   if(REVIEW.includes(f)){const r=state.resolved[key(s.id,f)];
-   h+=r?'<span class="chip ok">Confirmed</span>':`<button class="chip btn" data-act="open" data-id="${s.id}">${lbl[f]}</button>`;}
+   h+=r?`<span class="chip ok">${r.book?'Saved address':'Confirmed'}</span>`:`<button class="chip btn" data-act="open" data-id="${s.id}">${lbl[f]}</button>`;}
   else if(info[f])h+=`<span class="chip ${f==='newship'?'warn':'info'}">${info[f]}</span>`;}
  return h;}
 function detail(s){
  let cols='';
  for(const f of s.flags.filter(f=>REVIEW.includes(f)&&!state.resolved[key(s.id,f)])){
   if(f==='noaddr'&&s.addrSrc==='order')cols+=`<div><h3>Address</h3><p>The master list has no record for this stop. The order text carries an address:</p><p class="mono">${esc(s.raw)}</p><p>Proposed: <b>${esc(s.addr)}</b></p><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}">Use the order text</button></div></div>`;
-  else if(f==='noaddr')cols+=`<div><h3>Address</h3><p>${s.flags.includes('newship')?'This ship-to is not on the master list yet, so its location is not on file either.':'No master record, and the order text has no address.'} Saved addresses join the master list so the next order places correctly.</p><label for="addr-${s.id}" class="sub">Delivery address</label><input type="text" id="addr-${s.id}" placeholder="Type or paste the address"><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-input="addr-${s.id}">Save address</button></div></div>`;
+  else if(f==='noaddr')cols+=`<div><h3>Address</h3><p>${s.flags.includes('newship')?'This ship-to is not on the master list yet, so its location is not on file either.':'No master record, and the order text has no address.'} Saved addresses go into the Ship-to list, so the next order for the same customer and ship-to fills in by itself.</p><label for="addr-${s.id}" class="sub">Delivery address</label><input type="text" id="addr-${s.id}" placeholder="Type or paste the address"><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-input="addr-${s.id}">Save address</button></div></div>`;
   else if(f==='postal')cols+=`<div><h3>Postal code</h3><p>The master list holds 0 for this stop.</p><label for="post-${s.id}" class="sub">Postal code</label><input type="text" id="post-${s.id}" placeholder="6 digits" inputmode="numeric" maxlength="6"><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-input="post-${s.id}">Save postal code</button></div></div>`;
   else if(f==='conflict'){const c=CONFLICT[s.id];cols+=`<div><h3>${esc(c.what)}</h3><p><b>Order says:</b> ${esc(c.order)}</p><p><b>Master list says:</b> ${esc(c.master)}</p><label><input type="radio" name="cf-${s.id}" value="order" checked> Follow the order (current team rule)</label><label><input type="radio" name="cf-${s.id}" value="master"> Use the master list</label><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-radio="cf-${s.id}">Confirm</button></div></div>`;}}
  cols+=`<div><h3>How Claude read the remarks</h3><p class="mono">${esc(s.raw)}</p><p>${esc(s.read)}</p></div>`;
@@ -653,17 +788,18 @@ function renderSide(){
  <div class="navhead">Modules</div>
  <button class="nav ${state.step==='fleet'?'on':''}" data-act="goto" data-v="fleet">${ICON.truck}Vehicle fleet<span class="r">${state.fleet.types.length} types</span></button>
  <button class="nav ${state.step==='orders'?'on':''}" data-act="goto" data-v="orders">${ICON.box}Delivery orders<span class="r">${okFiles?summary().orders:''}</span></button>
+ <button class="nav ${state.step==='shipto'?'on':''}" data-act="goto" data-v="shipto">${ICON.pin}Ship-to list<span class="r">${Object.keys(BOOK).length||''}</span></button>
  <div class="navhead">Planning</div>
  <button class="nav ${state.step==='routes'?'on':''}" data-act="goto" data-v="routes"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes<span class="r">${state.routes.length?state.routes.filter(r=>state.approved[r.id]).length+'/'+state.routes.length:''}</span></button>
  <div class="navhead">Customer summaries</div>
  ${CUSTOMERS.map((c,i)=>`<div class="cust"><span class="dot ${i===0?'ok':''}"></span>${esc(c)}<span class="r">${i===0?'readable':'needs sample'}</span></div>`).join('')}
  <div class="sidefoot">Prototype. Locations are approximate and only exist for GroupeSeb ship-tos already on file.</div>`;}
 function renderTop(){
- const step={fleet:'Vehicle fleet',orders:'Delivery orders',routes:'Approve routes'}[state.step];
+ const step={fleet:'Vehicle fleet',orders:'Delivery orders',shipto:'Ship-to list',routes:'Approve routes'}[state.step];
  const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button>`:'';
  return `<div class="crumb"><span>Route Planner</span><span class="sep">/</span><b>${step}</b>${state.step==='routes'&&state.dateLabel?`<span class="sub">Delivery ${esc(state.dateLabel)}</span>`:''}</div><div class="tools">${tools}</div>`;}
 function renderTabs(){
- return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button>`;}
+ return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="shipto" aria-selected="${state.step==='shipto'}">${ICON.pin}Ship-to list</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button>`;}
 function fleetNotes(){
  const fl=state.fleet,m=[];
  const miss=fl.types.filter(t=>!t.cbm&&t.kind!=='special').map(t=>t.name);
@@ -675,7 +811,17 @@ function fleetNotes(){
  if(!fl.vehicles.length)m.push({t:'There are no plate numbers in the Fleet List, so I cannot tell how many of each type you own. A route may ask for a 24 footer when you have none free.'});
  m.push({t:'AC trucks are not used in planning, because the orders do not say which goods need chilling. Tell me how that should work and I will add it.'});
  return m;}
+ function shiptoNotes(){
+ const n=Object.keys(BOOK).length,m=[];
+ m.push({t:'Every address you save while approving a route is kept here by customer and ship-to name. The next order for the same pair fills in by itself.'});
+ m.push({t:SYNC.status==='ok'?'You are connected to the shared list. Addresses saved by any manager appear for everyone after they refresh or reopen the page.':'You are not connected to the shared list yet, so addresses are kept on this computer only. Enter your name and the access code above to connect.'});
+ m.push({t:'The order text still wins. If an order carries a different address, I show it for you to confirm and the list is updated.'});
+ m.push({t:'A saved address stops the retyping, but it does not give the page a map location, so arrival times are still not estimated for these stops until address look-up is added.'});
+ if(!bookOk)m.push({t:'This browser is not letting the page save anything (private window or blocked site data), so the list will be lost when you close the tab. Use Download to keep it.'});
+ if(n)m.push({t:'The list is saved in this browser only. To share it with other managers, download it and put it in a shared folder, and they can load it here.'});
+ return m;}
 function notes(){
+ if(state.step==='shipto')return shiptoNotes();
  if(state.step==='fleet')return fleetNotes();
  const m=[];
  if(state.step==='orders'){
@@ -700,17 +846,18 @@ function notes(){
  return m;}
 function renderAssist(){
  const feed=notes().map(x=>`<div class="msg"><p class="t">${esc(x.t)}</p>${x.a&&x.a.length?`<div class="acts2">${x.a.map(b=>`<button class="act" data-act="${b.act}"${b.id?` data-id="${b.id}"`:''}>${esc(b.l)}</button>`).join('')}</div>`:''}</div>`).join('');
- return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',routes:'Routes'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
+ return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',shipto:'Ship-tos',routes:'Routes'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
 
 /* ---------- shell ---------- */
 function render(){
  document.getElementById('side').innerHTML=renderSide();
  document.getElementById('topbar').innerHTML=renderTop();
  document.getElementById('tabs').innerHTML=renderTabs();
- document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():renderRoutes();
+ document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():state.step==='shipto'?renderShipto():renderRoutes();
  document.getElementById('assist').innerHTML=renderAssist();
  if(state.step==='orders')wireDrop();
  if(state.step==='fleet')wireFleet();
+ if(state.step==='shipto')wireShipto();
  wireSearch();}
 function wireDrop(){
  const d=document.getElementById('drop');if(!d)return;
@@ -732,6 +879,7 @@ function printRoute(id){
  let body='';
  a.e.legs.forEach((l,i)=>{const s=l.stop;const os=ORDERS[s.id]||[];
   body+=`<tr class="sh"><td colspan="6"><b>${i+1}. ${esc(s.name)}</b><span>${esc(addrText(s))}</span><span>Window: ${esc(winText(s))} &nbsp; Expected arrival: ${s.noloc?'not estimated':fmt(l.eta)}${s.maxH?' &nbsp; Max height '+s.maxH+' m':''}</span></td></tr>`;
+  {const be=bookGet(s.cust,s.name,s.code);if(be&&(be.method||be.pod))body+=`<tr class="sh"><td colspan="6" style="font-weight:400"><b>Delivery rules:</b> ${be.method?esc(be.method).replace(/\n/g,'<br>'):''}${be.method&&be.pod?'<br>':''}${be.pod?'<b>POD:</b> '+esc(be.pod).replace(/\n/g,'<br>'):''}</td></tr>`;}
   os.forEach(o=>{body+=`<tr><td>${esc(o.cust||'')}</td><td class="m">${esc(o.doc)}</td><td class="n">${o.qty}</td><td class="n">${o.cbm.toFixed(3)}</td><td>${o.type==='Collection'?'<b>COLLECT. </b>':''}${esc(o.remarks)}</td><td class="sg"></td></tr>`;});});
  const html=`<div class="ps"><div class="pt"><h1>Route ${rt.n} <small>${esc(rt.label)}</small></h1><div class="st ${appr?'ok':'dr'}">${appr?'APPROVED':'DRAFT, NOT APPROVED'}</div></div>
  <table class="pm"><tr><td><span>Delivery date</span>${esc(date)||'&nbsp;'}</td><td><span>Vehicle</span>${esc(as.veh||'')||'&nbsp;'}</td><td><span>Driver</span>${esc(as.drv||'')||'&nbsp;'}</td><td><span>Stops</span>${a.seq.length}</td><td><span>Volume</span>${m3(a.cbm)} m³</td><td><span>Leaves / back (est.)</span>${a.seq.every(s=>s.noloc)?'not estimated':fmt(a.e.depart)+' / '+fmt(a.e.end)}</td></tr></table>
@@ -771,7 +919,17 @@ document.addEventListener('click',ev=>{
  else if(a==='resolve'){const id=t.dataset.id,f=t.dataset.f;let val={};
   if(t.dataset.input){const v=document.getElementById(t.dataset.input).value.trim();if(!v){toast('Enter a value first.');return}val.text=v}
   if(t.dataset.radio){const r=document.querySelector('input[name="'+t.dataset.radio+'"]:checked');val.choice=r?r.value:'order'}
-  state.resolved[key(id,f)]=Object.assign({ok:true},val);if(!pendingFlags(S[id]).length)state.open=null;toast('Confirmed.');render()}
+  state.resolved[key(id,f)]=Object.assign({ok:true},val);if(!pendingFlags(S[id]).length)state.open=null;
+  let saved=null;{const s=S[id];if(f==='noaddr')saved=bookPut(s.cust,s.name,Object.assign({addr:val.text||s.addr},s.code?{code:String(s.code)}:{}));else if(f==='postal'&&val.text)saved=bookPut(s.cust,s.name,Object.assign({postal:val.text},s.code?{code:String(s.code)}:{}));}
+  toast(saved===true?'Confirmed and saved to the Ship-to list.':saved===false?'Confirmed, but this browser would not save it for next time.':'Confirmed.');render()}
+ else if(a==='dlbook'){bookDownload()}
+ else if(a==='pickbook'){document.getElementById('bf').click()}
+ else if(a==='pickbp'){document.getElementById('bpf').click()}
+ else if(a==='delbook'){delete BOOK[t.dataset.k];bookSave();if(SYNC.code&&SYNC.status==='ok')sapi('DELETE','?key='+encodeURIComponent(t.dataset.k),{}).catch(()=>{});render()}
+ else if(a==='syncconnect'){SYNC.name=document.getElementById('sname').value.trim();SYNC.code=document.getElementById('scode').value.trim();if(!SYNC.name||!SYNC.code){SYNC.msg='Enter your name and the access code.';SYNC.status=SYNC.code?SYNC.status:'off';render();return}syncKeep();SYNC.status='wait';render();syncPull().then(()=>{syncKeep();render();toast(SYNC.status==='ok'?'Connected to the shared list.':SYNC.msg||'Not connected.')})}
+ else if(a==='syncrefresh'){SYNC.status='wait';render();syncPull().then(()=>{render();toast(SYNC.status==='ok'?'Shared list refreshed.':SYNC.msg||'Not connected.')})}
+ else if(a==='syncseed'){const n=seedBuiltIn();toast(n?`Added ${n} GroupeSeb addresses${SYNC.status==='ok'?' to the shared list':''}.`:'The built-in addresses are already in the list.');render()}
+ else if(a==='syncoff'){SYNC.code='';SYNC.status='off';SYNC.msg='';syncKeep();render()}
  else if(a==='printroute'){printRoute(t.dataset.id)}
  else if(a==='approve'){state.approved[t.dataset.id]=true;render()}
  else if(a==='undo'){delete state.approved[t.dataset.id];render()}
@@ -789,8 +947,6 @@ document.addEventListener('change',ev=>{
  toast('Moved. Route '+to.n+(from.ids.length?' and Route '+from.n:'')+' need approving again.');render()});
 state.fleet=fleetFromRaw(FLEET_DEFAULT);
 render();
+if(SYNC.code)syncPull().then(()=>render());
 
 </script>
-
-</body>
-</html>
