@@ -162,6 +162,29 @@ input[type=text]{width:100%}
 .seg span{font-size:12px;color:var(--muted2)}
 .seg.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
 .empty{padding:16px 14px}.empty p{margin:4px 0 0;color:var(--muted2)}
+
+.asg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:10px 14px;border-top:1px solid var(--line)}
+.asg label{display:grid;gap:3px;font-size:12px;color:var(--muted)}
+.fa{display:flex;flex-wrap:wrap;gap:8px}
+#printsheet{display:none}
+@media print{
+ @page{size:A4 landscape;margin:10mm}
+ body{background:#fff!important;color:#000!important}
+ .announce,.stage,.toast{display:none!important}
+ #printsheet{display:block;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#000;background:#fff}
+ .ps h1{font-size:20px;margin:0}.ps h1 small{font-size:12px;font-weight:400;color:#444;margin-left:8px}
+ .pt{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+ .st{font-weight:700;border:2px solid #000;padding:2px 10px}.st.dr{border-style:dashed}
+ .ps table{width:100%;border-collapse:collapse}
+ .ps th,.ps td{border:1px solid #000;padding:4px 6px;text-align:left;vertical-align:top;font-size:11px}
+ .ps th{background:#eee;font-weight:700;white-space:normal;color:#000}
+ .pm td span{display:block;font-size:9px;color:#444;text-transform:uppercase}.pm{margin-bottom:8px}
+ .pl td.n,.pl th.n{text-align:right}.pl td.m{font-family:monospace}
+ .pl .sg{width:26%}.pl td.sg{height:34px}
+ .pl tr.sh td{background:#f3f3f3;font-size:12px}.pl tr.sh span{display:block;font-size:11px;font-weight:400}
+ .pl tr{page-break-inside:avoid}
+ .pn{font-size:9px;color:#444;margin-top:6px}
+}
 @media (prefers-reduced-motion:no-preference){.bar i{transition:width .25s}}
 </style>
 <div class="announce">Prototype with sample locations<span>Your Excel files are read in this browser and never uploaded</span></div>
@@ -175,6 +198,7 @@ input[type=text]{width:100%}
   <aside class="assist" id="assist"></aside>
 </div></div>
 <div class="toast" id="toast" hidden></div>
+<div id="printsheet" aria-hidden="true"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // Stops: id, cust, name, area, lat, lng, cbm, win [start,end] minutes or null, maxH
@@ -399,7 +423,7 @@ function routeLabel(seq){
 
 /* ---------- state ---------- */
 let S={},ORDERS={};
-const state={step:'orders',q:'',files:[],fleet:null,plan:'lo',photos:{},routes:[],approved:{},resolved:{},open:null,orders:{},next:1,over:false,busy:false};
+const state={step:'orders',assign:{},q:'',files:[],fleet:null,plan:'lo',photos:{},routes:[],approved:{},resolved:{},open:null,orders:{},next:1,over:false,busy:false};
 let INITIAL=[];
 let toastT;
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>e.hidden=true,2800)}
@@ -604,16 +628,20 @@ function routeCard(rt,rts){
   rows+=`<tr class="${pendingFlags(s).length?'flag':''}" data-row="${s.id}"><td class="mono">${i+1}</td><td><div class="nm">${esc(s.name)}</div><div class="sub">${addrCell(s)}</div><button class="link" data-act="orders" data-id="${s.id}">${state.orders[s.id]?'Hide':'Show'} ${plural(s.n,'order')}</button></td><td class="num">${m3(s.cbm)}</td><td>${esc(winText(s))}</td><td class="mono">${s.noloc?'<span class="sub">no location</span>':fmt(l.eta)+' '+st}</td><td>${noteChips(s)}</td><td><select data-act="move" data-id="${s.id}" data-from="${rt.id}" aria-label="Move ${esc(s.name)} to another route">${moveOpts()}</select></td></tr>`;
   if(state.open===s.id)rows+=detail(s);
   if(state.orders[s.id])rows+=ordersRows(s);});
- const foot=done?`<div class="why"><span class="chip ok">Approved</span></div><button class="btn ghost" data-act="undo" data-id="${rt.id}">Undo approval</button>`
-  :`<div class="why">${a.why.length?a.why.map(w=>`<span class="chip bad">${esc(w)}</span>`).join(''):'<span class="chip ok">Ready to approve</span>'}</div><button class="btn" data-act="approve" data-id="${rt.id}"${a.why.length?' disabled':''}>Approve Route ${rt.n}</button>`;
- return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span><span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div><div class="rf">${foot}</div></section>`;}
+ const pr=`<button class="btn ghost" data-act="printroute" data-id="${rt.id}">Print route sheet</button>`;
+ const foot=done?`<div class="why"><span class="chip ok">Approved</span></div><div class="fa">${pr}<button class="btn ghost" data-act="undo" data-id="${rt.id}">Undo approval</button></div>`
+  :`<div class="why">${a.why.length?a.why.map(w=>`<span class="chip bad">${esc(w)}</span>`).join(''):'<span class="chip ok">Ready to approve</span>'}</div><div class="fa">${pr}<button class="btn" data-act="approve" data-id="${rt.id}"${a.why.length?' disabled':''}>Approve Route ${rt.n}</button></div>`;
+ const as=state.assign[rt.id]||{};
+ const asg=`<div class="asg"><label>Vehicle<input type="text" data-asg="${rt.id}" data-k="veh" value="${esc(as.veh||'')}" placeholder="Plate number" list="plates" autocomplete="off"></label><label>Driver<input type="text" data-asg="${rt.id}" data-k="drv" value="${esc(as.drv||'')}" placeholder="Driver name" autocomplete="off"></label></div>`;
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span><span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}<div class="rf">${foot}</div></section>`;}
 function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
 function renderRoutes(){
  const rts=state.routes;const appr=rts.filter(r=>state.approved[r.id]).length;
  const stops=allStops();const pend=stops.reduce((a,s)=>a+pendingFlags(s).length,0);
  const tot=stops.reduce((a,s)=>a+s.cbm,0),orders=stops.reduce((a,s)=>a+s.n,0);
  const all=appr===rts.length&&rts.length>0;
- return `<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
+ const dl=`<datalist id="plates">${state.fleet.vehicles.map(v=>`<option value="${esc(v.plate)}">${esc(v.type)}</option>`).join('')}</datalist>`;
+ return dl+`<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
  ${all?'<div class="done-msg">All routes approved. Vehicle and driver matching comes next and stays with you for now.</div>':''}
  ${rts.map(r=>routeCard(r,rts)).join('')}`;}
 
@@ -691,6 +719,28 @@ function wireDrop(){
  d.addEventListener('drop',async e=>{e.preventDefault();state.over=false;d.classList.remove('over');addFiles(await dropFiles(e.dataTransfer))});
  document.getElementById('fi').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});
  document.getElementById('fd').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});}
+function addrText(s){
+ const a=state.resolved[key(s.id,'noaddr')],p=state.resolved[key(s.id,'postal')];
+ if(a&&a.text)return a.text;
+ if(p&&p.text)return s.addr.replace(/\s*\(postal code 0 on master\)/,'')+', S('+p.text+')';
+ if(s.addrSrc==='missing')return 'ADDRESS NEEDED';
+ return s.addr;}
+function printRoute(id){
+ const rt=state.routes.find(r=>r.id===id);if(!rt)return;
+ const a=analyse(rt);const as=state.assign[id]||{};const appr=!!state.approved[id];
+ const date=state.dateLabel||'';
+ let body='';
+ a.e.legs.forEach((l,i)=>{const s=l.stop;const os=ORDERS[s.id]||[];
+  body+=`<tr class="sh"><td colspan="6"><b>${i+1}. ${esc(s.name)}</b><span>${esc(addrText(s))}</span><span>Window: ${esc(winText(s))} &nbsp; Expected arrival: ${s.noloc?'not estimated':fmt(l.eta)}${s.maxH?' &nbsp; Max height '+s.maxH+' m':''}</span></td></tr>`;
+  os.forEach(o=>{body+=`<tr><td>${esc(o.cust||'')}</td><td class="m">${esc(o.doc)}</td><td class="n">${o.qty}</td><td class="n">${o.cbm.toFixed(3)}</td><td>${o.type==='Collection'?'<b>COLLECT. </b>':''}${esc(o.remarks)}</td><td class="sg"></td></tr>`;});});
+ const html=`<div class="ps"><div class="pt"><h1>Route ${rt.n} <small>${esc(rt.label)}</small></h1><div class="st ${appr?'ok':'dr'}">${appr?'APPROVED':'DRAFT, NOT APPROVED'}</div></div>
+ <table class="pm"><tr><td><span>Delivery date</span>${esc(date)||'&nbsp;'}</td><td><span>Vehicle</span>${esc(as.veh||'')||'&nbsp;'}</td><td><span>Driver</span>${esc(as.drv||'')||'&nbsp;'}</td><td><span>Stops</span>${a.seq.length}</td><td><span>Volume</span>${m3(a.cbm)} m³</td><td><span>Leaves / back (est.)</span>${a.seq.every(s=>s.noloc)?'not estimated':fmt(a.e.depart)+' / '+fmt(a.e.end)}</td></tr></table>
+ <table class="pl"><thead><tr><th>Customer</th><th>Doc. no.</th><th class="n">Qty</th><th class="n">m³</th><th>Remarks as sent</th><th class="sg">Received by / signature / stamp</th></tr></thead><tbody>${body}</tbody></table>
+ <p class="pn">Arrival times are estimates from a prototype and are not traffic-checked. Follow the order remarks where they differ.</p></div>`;
+ const el=document.getElementById('printsheet');el.innerHTML=html;
+ const clear=()=>{el.innerHTML='';window.removeEventListener('afterprint',clear)};window.addEventListener('afterprint',clear);
+ setTimeout(()=>window.print(),50);}
+document.addEventListener('input',ev=>{const t=ev.target.closest('input[data-asg]');if(!t)return;const id=t.dataset.asg;state.assign[id]=Object.assign(state.assign[id]||{},{[t.dataset.k]:t.value});});
 function wireFleet(){
  const ff=document.getElementById('ff'),pf=document.getElementById('pf');if(!ff)return;
  ff.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -714,7 +764,7 @@ document.addEventListener('click',ev=>{
  else if(a==='fleetreset'){state.fleet=fleetFromRaw(FLEET_DEFAULT);state.fleetMsg='';toast('Back to the 7 Oct fleet file.');render()}
  else if(a==='plan'){const had=state.routes.length;state.plan=t.dataset.v;state.routes=[];state.approved={};render();toast(had?'Planning basis changed. Build the routes again from Delivery orders.':'Planning basis changed.')}
  else if(a==='photo'){state.photoFor=state.fleet.types[+t.dataset.t].name;document.getElementById('pf').click()}
- else if(a==='newday'){state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.step='orders';render()}
+ else if(a==='newday'){state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.assign={};state.step='orders';render()}
  else if(a==='open'){state.open=state.open===t.dataset.id?null:t.dataset.id;render()}
  else if(a==='jump'){state.open=t.dataset.id;render();scrollToStop(t.dataset.id)}
  else if(a==='orders'){state.orders[t.dataset.id]=!state.orders[t.dataset.id];render()}
@@ -722,6 +772,7 @@ document.addEventListener('click',ev=>{
   if(t.dataset.input){const v=document.getElementById(t.dataset.input).value.trim();if(!v){toast('Enter a value first.');return}val.text=v}
   if(t.dataset.radio){const r=document.querySelector('input[name="'+t.dataset.radio+'"]:checked');val.choice=r?r.value:'order'}
   state.resolved[key(id,f)]=Object.assign({ok:true},val);if(!pendingFlags(S[id]).length)state.open=null;toast('Confirmed.');render()}
+ else if(a==='printroute'){printRoute(t.dataset.id)}
  else if(a==='approve'){state.approved[t.dataset.id]=true;render()}
  else if(a==='undo'){delete state.approved[t.dataset.id];render()}
  else if(a==='approveall'){let n=0;state.routes.forEach(r=>{if(!state.approved[r.id]&&!analyse(r).why.length){state.approved[r.id]=true;n++}});const left=state.routes.filter(r=>!state.approved[r.id]).length;toast(n?plural(n,'route')+' approved.'+(left?' '+left+' still need attention.':''):'No route is ready yet. Confirm the flagged items first.');render()}
