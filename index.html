@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+</head>
+<body>
+<title>Route Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout: app window on a faint grid. Left rail (workspace, steps, customers), centre work area with tabs, right rail of Claude's notes. */
+:root{
+  --page:#EEEDE9; --grid:#E4E3DE; --bg:#FBFAF8; --side:#F6F5F1; --card:#FFFFFF; --line:#E7E5DF; --line2:#D9D7D0;
+  --ink:#1B1B1A; --muted:#8B8A84; --muted2:#63625D;
+  --accent:#D3A468; --accent-soft:#F6EAD7; --accent-ink:#8A5E21;
+  --btn:#1B1B1A; --on-btn:#FFFFFF; --chip:#F0EFEB;
+  --ok:#3C7A4C; --ok-bg:#E4F0E7; --bad:#B03A2C; --bad-bg:#F7E1DD; --info:#4A5A72; --info-bg:#E9EDF3;
+  --shadow:0 1px 2px rgba(20,20,10,.06),0 12px 40px rgba(20,20,10,.08);
+  --f:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'Geist Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --page:#0D0D0C; --grid:#171716; --bg:#151514; --side:#1A1A19; --card:#1E1E1C; --line:#2C2B29; --line2:#3A3936;
+  --ink:#EEEDE9; --muted:#8E8D87; --muted2:#B2B1AA;
+  --accent:#DDB077; --accent-soft:#3B2F1E; --accent-ink:#E6BE86;
+  --btn:#EEEDE9; --on-btn:#151514; --chip:#2A2927;
+  --ok:#86CC96; --ok-bg:#1B3224; --bad:#F29389; --bad-bg:#3C1E1B; --info:#9DB6DA; --info-bg:#1E2A3C;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.45); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --page:#0D0D0C; --grid:#171716; --bg:#151514; --side:#1A1A19; --card:#1E1E1C; --line:#2C2B29; --line2:#3A3936;
+  --ink:#EEEDE9; --muted:#8E8D87; --muted2:#B2B1AA;
+  --accent:#DDB077; --accent-soft:#3B2F1E; --accent-ink:#E6BE86;
+  --btn:#EEEDE9; --on-btn:#151514; --chip:#2A2927;
+  --ok:#86CC96; --ok-bg:#1B3224; --bad:#F29389; --bad-bg:#3C1E1B; --info:#9DB6DA; --info-bg:#1E2A3C;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.45); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--ink);font-family:var(--f);font-size:13.5px;line-height:1.45;padding:0}
+button{font-family:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.announce{background:#111;color:#fff;text-align:center;padding:12px 16px;font-size:13px;letter-spacing:.01em}
+.announce span{opacity:.6;margin-left:8px}
+.stage{padding:24px 16px 40px;background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:32px 32px;min-height:100%}
+.app{max-width:1440px;margin:0 auto;background:var(--bg);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow);display:grid;grid-template-columns:236px minmax(0,1fr) 330px;overflow:hidden;min-height:760px}
+@media (max-width:1180px){.app{grid-template-columns:220px minmax(0,1fr)}.assist{grid-column:1/-1;border-left:0!important;border-top:1px solid var(--line)}}
+@media (max-width:820px){.app{grid-template-columns:minmax(0,1fr)}.app>.side{display:none}}
+.side{background:var(--side);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ws{display:flex;align-items:center;gap:8px;padding:6px 8px 12px;font-weight:600}
+.logo{width:22px;height:22px;border-radius:6px;background:var(--accent-soft);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.navhead{font-size:11.5px;color:var(--muted);padding:14px 8px 4px}
+.nav{appearance:none;border:0;background:transparent;color:var(--muted2);display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 8px;border-radius:7px;font-size:13px;cursor:pointer}
+.nav:hover:not([disabled]){background:var(--chip);color:var(--ink)}
+.nav.on{background:var(--chip);color:var(--ink);font-weight:500}
+.nav[disabled]{opacity:.5;cursor:not-allowed}
+.nav svg{flex:none;width:15px;height:15px}
+.nav .r{margin-left:auto;font-size:11.5px;color:var(--muted)}
+.cust{display:flex;align-items:center;gap:9px;padding:6px 8px;color:var(--muted2);font-size:13px}
+.cust .dot{width:7px;height:7px;border-radius:50%;background:var(--line2);flex:none}
+.cust .dot.ok{background:var(--ok)}
+.cust .r{margin-left:auto;font-size:11.5px;color:var(--muted);white-space:nowrap}
+.sidefoot{margin-top:auto;padding:12px 8px 2px;font-size:11.5px;color:var(--muted)}
+.main{min-width:0;display:flex;flex-direction:column}
+.topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.crumb{display:flex;gap:8px;align-items:baseline;color:var(--muted2);font-size:13px}
+.crumb b{color:var(--ink);font-weight:500}
+.crumb .sep{color:var(--line2)}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}
+.tab{appearance:none;border:0;background:transparent;color:var(--muted);padding:12px 8px;font-size:14px;font-weight:500;cursor:pointer;display:flex;gap:8px;align-items:center;justify-content:center;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+.tab[disabled]{opacity:.45;cursor:not-allowed}
+.tab svg{width:16px;height:16px}
+.work{padding:18px;display:grid;gap:14px;align-content:start}
+.btn{appearance:none;font:500 13px var(--f);padding:8px 14px;border-radius:9px;border:1px solid var(--btn);background:var(--btn);color:var(--on-btn);cursor:pointer}
+.btn.ghost{background:var(--card);color:var(--ink);border-color:var(--line2)}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+.btn:hover:not([disabled]){opacity:.88}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;min-width:0}
+.card>.ch{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);font-weight:500}
+.card>.ch small{font-weight:400;color:var(--muted);font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.kpi .kb{padding:14px 14px 16px;text-align:center;display:grid;gap:6px;justify-items:center}
+.kpi .kb b{font-size:34px;font-weight:500;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.pill{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:6px;background:var(--chip);color:var(--muted2)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.warn{background:var(--accent-soft);color:var(--accent-ink)} .pill.info{background:var(--info-bg);color:var(--info)}
+.bar{height:4px;background:var(--line);border-radius:3px;width:100%;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+.scroll{overflow:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th{font-weight:500;font-size:12px;color:var(--muted);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child>td{border-bottom:0}
+td.num,th.num{text-align:right}
+tr.flag>td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+tr.det td{background:var(--bg);padding:14px}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--muted)} .sub{font-size:12px;color:var(--muted)}
+.nm{font-weight:500}
+.chip{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:6px;white-space:nowrap;margin:1px 4px 1px 0;border:0;background:var(--chip);color:var(--muted2)}
+.chip.ok{background:var(--ok-bg);color:var(--ok)} .chip.warn{background:var(--accent-soft);color:var(--accent-ink)} .chip.bad{background:var(--bad-bg);color:var(--bad)} .chip.info{background:var(--info-bg);color:var(--info)}
+.chip.btn{cursor:pointer;font-weight:500;box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft);color:var(--accent-ink);padding:2px 8px;font-family:inherit}
+.link{appearance:none;border:0;background:none;color:var(--muted2);font:inherit;font-size:12px;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
+select,input[type=text]{font:400 12.5px var(--f);color:var(--ink);background:var(--card);border:1px solid var(--line2);border-radius:7px;padding:5px 8px;max-width:100%}
+input[type=text]{width:100%}
+.route .rh{display:flex;flex-wrap:wrap;gap:6px 22px;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
+.rt{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;min-width:0}
+.rid{font-size:15px;font-weight:600}
+.area{color:var(--muted2)}
+.rmeta{display:flex;flex-wrap:wrap;gap:2px 16px;font-size:12.5px;color:var(--muted2)}
+.rmeta b{color:var(--ink);font-weight:500}
+.route.done{border-color:var(--ok)}
+.route .rf{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid var(--line)}
+.why{display:flex;flex-wrap:wrap;gap:2px;min-width:0}
+.det .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.det h3{font-size:12px;font-weight:500;color:var(--muted);margin:0 0 4px}
+.det p{margin:0 0 6px}
+.det .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.det label{display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;cursor:pointer}
+.ord td,.ord th{font-size:12px;padding:5px 8px}
+.drop{border:1.5px dashed var(--line2);border-radius:12px;background:var(--card);padding:34px 16px;text-align:center;display:grid;gap:12px;justify-items:center}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop h2{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+.drop p{margin:0;max-width:58ch;color:var(--muted2)}
+.row{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.files{display:grid;gap:10px}
+.file{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:start}
+.file.bad{border-color:var(--bad)}
+.file .fn{font-weight:500;overflow-wrap:anywhere}
+.file .d2{grid-column:1/-1;font-size:12.5px;color:var(--muted2)}
+.ready{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;justify-content:space-between;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.visually{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.assist{border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;background:var(--card)}
+.assist .ah{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:500;display:flex;justify-content:space-between;gap:8px}
+.assist .ah small{font-weight:400;color:var(--muted)}
+.feed{padding:14px 16px;display:grid;gap:12px;align-content:start;flex:1;max-height:760px;overflow:auto}
+.msg{color:var(--ink);line-height:1.5}
+.msg .t{margin:0}
+.acts2{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:6px}
+.act{appearance:none;border:0;background:var(--chip);color:var(--ink);border-radius:10px;padding:7px 11px;font-size:12.5px;cursor:pointer}
+.act:hover{background:var(--line)}
+.ask{margin:12px 14px 14px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;color:var(--muted);font-size:12.5px}
+.ask b{display:block;font-weight:400;color:var(--muted);opacity:.8}
+.done-msg{background:var(--ok-bg);color:var(--ok);border-radius:10px;padding:10px 14px;font-weight:500}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--btn);color:var(--on-btn);padding:8px 14px;border-radius:9px;font-size:13px;z-index:5}
+
+.nw{white-space:nowrap}.tb{padding:10px 14px;border-bottom:1px solid var(--line)}
+.drop.slim{padding:20px 16px;gap:8px}.drop.slim h2{font-size:17px}
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.vt{display:flex;flex-direction:column;overflow:hidden}
+.vph{height:84px;background:var(--chip);display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line)}
+.vph:has(img){height:150px}.vph img{width:100%;height:100%;object-fit:cover}
+.phbtn{appearance:none;border:1px dashed var(--line2);background:transparent;color:var(--muted2);border-radius:9px;padding:8px 12px;display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer}
+.phbtn svg{width:14px;height:14px}
+.vb{padding:12px 14px;display:grid;gap:6px;align-content:start}
+.vh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px}
+.vnum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:2px 0}
+.vnum div{display:grid;gap:1px}.vnum b{font-size:18px;font-weight:500;font-variant-numeric:tabular-nums}
+.vp{margin:0;font-size:12.5px}
+.plan{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;padding:12px 14px}
+.seg{appearance:none;text-align:left;border:1px solid var(--line2);background:var(--card);color:var(--ink);border-radius:10px;padding:10px 12px;display:grid;gap:4px;cursor:pointer;font-family:inherit}
+.seg span{font-size:12px;color:var(--muted2)}
+.seg.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
+.empty{padding:16px 14px}.empty p{margin:4px 0 0;color:var(--muted2)}
+@media (prefers-reduced-motion:no-preference){.bar i{transition:width .25s}}
+</style>
+<div class="announce">Prototype with sample locations<span>Your Excel files are read in this browser and never uploaded</span></div>
+<div class="stage"><div class="app">
+  <aside class="side" id="side"></aside>
+  <section class="main">
+    <div class="topbar" id="topbar"></div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="work" id="work"></div>
+  </section>
+  <aside class="assist" id="assist"></aside>
+</div></div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// Stops: id, cust, name, area, lat, lng, cbm, win [start,end] minutes or null, maxH
+const H=(h,m=0)=>h*60+m;
+const STOPS=[
+ // GroupeSeb (real order structure, 24 Sep 2026)
+ {id:'G01',cust:'GroupeSeb',name:'Heap Seng Group',area:'Address missing',noloc:true,lat:1.3358,lng:103.7465,cbm:8.962,n:1,win:[null,H(13)],macro:1,types:['Delivery'],addrSrc:'missing',
+  addr:'Not on master list',raw:'Inform warehouse in-charge [contact masked] one day in advance before 4pm and 1-2 hours before delivery. Please ensure to reach Heap Seng WH by 1:00pm.',
+  read:'Arrive by 13:00. Call the warehouse in-charge a day ahead (before 16:00) and 1–2 hours before arrival.',flags:['noaddr','call']},
+ {id:'G02',cust:'GroupeSeb',name:'Best Denki Vivo City',area:'HarbourFront',lat:1.2644,lng:103.8222,cbm:8.49,n:10,win:[null,H(14)],macro:2,types:['Delivery','Collection'],addrSrc:'master',
+  addr:'1 Harbour Front Walk #02-07 Vivo City, S(098585)',raw:'Before 2pm / Sat till 1pm  |  Collect upon delivery',read:'Before 14:00 (Saturdays before 13:00). 10 orders: collections are picked up on the same visit.',flags:['mixed']},
+ {id:'G03',cust:'GroupeSeb',name:'Best Denki Jurong Point',area:'Jurong West',lat:1.3397,lng:103.7066,cbm:0.946,n:1,win:[null,H(15)],macro:3,types:['Delivery'],addrSrc:'master',
+  addr:'Jurong Point Shopping Centre (postal code 0 on master)',raw:'Before 3PM',read:'Before 15:00.',flags:['postal']},
+ {id:'G04',cust:'GroupeSeb',name:'Best Denki IMM',area:'Jurong East',lat:1.3343,lng:103.7439,cbm:5.883,n:7,win:[null,H(16)],macro:3,types:['Delivery','Collection'],addrSrc:'master',
+  addr:'2 Jurong East St 21 #03-33/47 IMM, S(609601)',raw:'Before 4PM  |  Collect upon delivery',read:'Before 16:00. 7 orders including collections.',flags:['mixed']},
+ {id:'G05',cust:'GroupeSeb',name:'Kong Tai Electrical',area:'Jurong West',lat:1.3487,lng:103.7130,cbm:0.571,n:1,win:[null,H(16)],macro:3,types:['Delivery'],addrSrc:'master',
+  addr:'504 Jurong West St 51 #01-221, S(640504)',raw:'DELIVER BEFORE 4PM',read:'Before 16:00.',flags:[]},
+ {id:'G06',cust:'GroupeSeb',name:'Best Denki Funan',area:'City',lat:1.2910,lng:103.8499,cbm:0.746,n:1,win:[null,H(15)],macro:4,types:['Delivery'],addrSrc:'master',
+  addr:'107 North Bridge Rd, S(179105)',raw:'Before 3PM',read:'Before 15:00.',flags:[]},
+ {id:'G07',cust:'GroupeSeb',name:'Best Denki Great World',area:'River Valley',lat:1.2937,lng:103.8317,cbm:3.943,n:6,win:[null,H(15)],macro:4,types:['Delivery'],addrSrc:'master',
+  addr:'1 Kim Seng Promenade #02-33B/D Great World City, S(237994)',raw:'Before 3PM',read:'Before 15:00.',flags:[]},
+ {id:'G08',cust:'GroupeSeb',name:'Best Denki Plaza Singapura',area:'Orchard',lat:1.3006,lng:103.8456,cbm:1.023,n:1,win:[null,H(15)],macro:4,types:['Delivery'],addrSrc:'master',
+  addr:'68 Orchard Rd #04-09 Plaza Singapura, S(238839)',raw:'Before 3PM',read:'Before 15:00.',flags:[]},
+ {id:'G09',cust:'GroupeSeb',name:'Best Denki Ngee Ann City',area:'Orchard',lat:1.3036,lng:103.8319,cbm:4.335,n:5,win:[null,H(14)],macro:4,types:['Delivery'],addrSrc:'master',
+  addr:'391 Orchard Rd #05-01/05 Ngee Ann City, S(238872)',raw:'Before 2pm / Sat till 1pm',read:'Before 14:00 (Saturdays before 13:00).',flags:[]},
+ {id:'G10',cust:'GroupeSeb',name:'NTUC Limau',area:'Kallang',lat:1.3235,lng:103.8640,cbm:0.416,n:1,win:null,macro:4,types:['Collection'],addrSrc:'order',
+  addr:'Blk 80 Lorong Limau #01-191, S(320080) (from order text)',raw:'LOR LIMAU BLK 80 LORONG LIMAU #01-191 SINGAPORE 320080',read:'Collection. No time window given. Address taken from the order text.',flags:['noaddr','coll']},
+ {id:'G11',cust:'GroupeSeb',name:'Best Denki Waterway Point',area:'Punggol',lat:1.4064,lng:103.9022,cbm:4.7,n:6,win:[null,H(12)],macro:5,types:['Delivery','Collection'],addrSrc:'master',
+  addr:'83 Punggol Central #B1-24 Waterway Point, S(828761)',raw:'Before 12pm  |  Collect upon delivery',read:'Before 12:00. 6 orders including collections.',flags:['mixed']},
+ {id:'G12',cust:'GroupeSeb',name:'Best Denki Junction 8',area:'Bishan',lat:1.3504,lng:103.8487,cbm:4.821,n:5,win:[null,H(15)],macro:5,types:['Delivery'],addrSrc:'master',
+  addr:'9 Bishan Place #03-02 Junction 8, S(579837)',raw:'Before 3pm / Sat till 1pm',read:'Before 15:00 (Saturdays before 13:00).',flags:[]},
+ {id:'G13',cust:'GroupeSeb',name:'NTUC Bedok North',area:'Bedok',lat:1.3335,lng:103.9390,cbm:1.106,n:1,win:[H(10),H(11)],macro:6,types:['Delivery'],addrSrc:'master',
+  addr:'Blk 212 Bedok North St 1 #01-147, S(460212)',raw:'Time:10am to 11am  M:[name masked]',read:'Fixed slot 10:00–11:00.',flags:['slot']},
+ {id:'G14',cust:'GroupeSeb',name:'NTUC Hyper Parkway Parade',area:'Marine Parade',lat:1.3014,lng:103.9053,cbm:0.509,n:2,win:[H(11),H(12)],macro:6,types:['Delivery'],addrSrc:'missing',
+  addr:'Not on master list',raw:'Time:11am to 12pm  M:[name masked]',read:'Fixed slot 11:00–12:00.',flags:['noaddr','slot']},
+ {id:'G15',cust:'GroupeSeb',name:'Best Denki Parkway Parade',area:'Marine Parade',lat:1.3014,lng:103.9053,cbm:2.914,n:4,win:[null,H(13)],macro:6,types:['Delivery'],addrSrc:'master',maxH:2.6,
+  addr:'80 Marine Parade Rd #02-33 Parkway Parade, S(449269)',raw:'Before 1pm / Sat till 1pm, "use trucks below 2.6m height limit"',read:'Before 13:00. Vehicle must be under 2.6 m high.',flags:['height']},
+ {id:'G16',cust:'GroupeSeb',name:'NTUC Hougang Point',area:'Hougang',lat:1.3715,lng:103.8924,cbm:0.281,n:1,win:[H(11),H(12)],macro:7,types:['Delivery'],addrSrc:'master',
+  addr:'1 Hougang St 91 #02-01 Hougang Point, S(538692)',raw:'Time:11am to 12pm  M:[name masked]',read:'Fixed slot 11:00–12:00.',flags:['slot']},
+ {id:'G17',cust:'GroupeSeb',name:'Parisilk Electronics (Changi South)',area:'Changi South',lat:1.3345,lng:103.9640,cbm:0.211,n:1,win:[H(12),H(15)],macro:7,types:['Delivery'],addrSrc:'order',
+  addr:'43 Changi South Ave 2 #03-03, S(486164) (order text)',raw:'43 CHANGI SOUTH AVE 2 #03-03 S (486164)  DELIVERY DATE: 24/09/2026  DELIVERY TIME: 12-3 PM',read:'12:00–15:00. The order gives 43 Changi South Ave 2; the master list says 39 Changi South Ave 2 #04-02 and "Deliver by 2PM".',flags:['conflict']},
+ {id:'G18',cust:'GroupeSeb',name:'NTUC Whitesands',area:'Pasir Ris',lat:1.3727,lng:103.9494,cbm:0.341,n:1,win:null,macro:7,types:['Collection'],addrSrc:'order',
+  addr:'1 Pasir Ris Central St 3 #B1-10 Whitesands, S(518457) (order text)',raw:'WHITESANDS 1 PASIR RIS CENTRL ST 3 WHITESANDS #B1-10 SINGAPORE 518457',read:'Collection. No time window given. Address taken from the order text.',flags:['noaddr','coll']},
+ {id:'G19',cust:'GroupeSeb',name:'NTUC Paya Lebar Quarter',area:'Paya Lebar',lat:1.3175,lng:103.8925,cbm:0.039,n:1,win:null,macro:7,types:['Collection'],addrSrc:'order',
+  addr:'10 Paya Lebar Rd #B2-09 PLQ, S(409057) (order text)',raw:'PAYA LEBAR QUARTER 10 PAYA LEBAR ROAD #B2-09, PAYA LEBAR QUARTER SINGAPORE 409057',read:'Collection. No time window given. Address taken from the order text.',flags:['noaddr','coll']},
+ {id:'G20',cust:'GroupeSeb',name:'Best Denki Bedok Mall',area:'Bedok',lat:1.3243,lng:103.9298,cbm:0.904,n:1,win:[null,H(16)],macro:7,types:['Delivery'],addrSrc:'master',
+  addr:'311 New Upper Changi Rd #B1-01/43/44 Bedok Mall, S(467360)',raw:'Before 4PM',read:'Before 16:00.',flags:[]},
+ {id:'G21',cust:'GroupeSeb',name:'Best Denki Digital Clementi',area:'Clementi',lat:1.3153,lng:103.7641,cbm:1.198,n:2,win:[H(14),H(16)],macro:7,types:['Delivery','Collection'],addrSrc:'master',
+  addr:'3155 Commonwealth Ave West #04-46 The Clementi Mall, S(120441)',raw:'Between 2 pm to 4pm  |  Collect upon delivery',read:'14:00–16:00 per the order. The master list says "Before 3pm / Sat till 1pm". Following the order.',flags:['conflict','mixed']},
+ // Customer B (sample)
+ {id:'B01',cust:'Customer B',name:'B · Jurong East store',area:'Jurong East',lat:1.3330,lng:103.7420,cbm:1.2,n:3,win:[H(9),H(12)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'pls deliver btw 9-12 am, call security b4 arrival',read:'09:00–12:00. Call security before arrival.',flags:['sample']},
+ {id:'B02',cust:'Customer B',name:'B · Orchard store',area:'Orchard',lat:1.3040,lng:103.8350,cbm:0.8,n:2,win:[null,H(15)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'by 3pm',read:'Before 15:00.',flags:['sample']},
+ {id:'B03',cust:'Customer B',name:'B · Tampines store',area:'Tampines',lat:1.3525,lng:103.9450,cbm:2.4,n:4,win:[H(10),H(13)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'10am - 1pm slot',read:'10:00–13:00.',flags:['sample']},
+ {id:'B04',cust:'Customer B',name:'B · Kaki Bukit store',area:'Kaki Bukit',lat:1.3340,lng:103.9090,cbm:1.1,n:2,win:[null,H(16)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'any time before 4pm',read:'Before 16:00.',flags:['sample']},
+ {id:'B05',cust:'Customer B',name:'B · Woodlands store',area:'Woodlands',lat:1.4360,lng:103.7860,cbm:3.0,n:5,win:[null,H(14)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'DELIVER BEFORE 2PM',read:'Before 14:00.',flags:['sample']},
+ {id:'B06',cust:'Customer B',name:'B · Bishan store',area:'Bishan',lat:1.3510,lng:103.8480,cbm:0.9,n:2,win:[null,H(15)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'before 3pm pls',read:'Before 15:00.',flags:['sample']},
+ // Customer C (sample)
+ {id:'C01',cust:'Customer C',name:'C · Clementi outlet',area:'Clementi',lat:1.3150,lng:103.7650,cbm:1.4,n:2,win:[H(14),H(17)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'Afternoon only 2-5pm',read:'14:00–17:00.',flags:['sample']},
+ {id:'C02',cust:'Customer C',name:'C · Jurong West outlet',area:'Jurong West',lat:1.3400,lng:103.7050,cbm:2.2,n:3,win:[null,H(16)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'before 4pm',read:'Before 16:00.',flags:['sample']},
+ {id:'C03',cust:'Customer C',name:'C · Pasir Ris outlet',area:'Pasir Ris',lat:1.3730,lng:103.9490,cbm:1.0,n:1,win:[null,H(12)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'morning delivery (before noon)',read:'Before 12:00.',flags:['sample']},
+ {id:'C04',cust:'Customer C',name:'C · Punggol outlet',area:'Punggol',lat:1.4020,lng:103.9060,cbm:1.8,n:3,win:[null,H(16)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'before 4pm',read:'Before 16:00.',flags:['sample']},
+ {id:'C05',cust:'Customer C',name:'C · Paya Lebar outlet',area:'Paya Lebar',lat:1.3180,lng:103.8920,cbm:0.7,n:1,win:[null,H(15)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'by 3pm',read:'Before 15:00.',flags:['sample']},
+ {id:'C06',cust:'Customer C',name:'C · Toa Payoh outlet',area:'Toa Payoh',lat:1.3330,lng:103.8470,cbm:2.5,n:4,win:[null,H(16)],types:['Delivery'],addrSrc:'sample',addr:'Sample address',raw:'before 4pm',read:'Before 16:00.',flags:['sample']},
+];
+const OWNER_OF={GroupeSeb:'A','Customer B':'B','Customer C':'C'};
+STOPS.forEach(s=>s.owner=OWNER_OF[s.cust]);
+const VEHICLES=[
+ {id:'V1',type:'Truck',cap:12,h:3.0,driver:'Driver 1',owner:'A'},
+ {id:'V2',type:'Truck',cap:10,h:2.5,driver:'Driver 2',owner:'A'},
+ {id:'V3',type:'Truck',cap:10,h:2.5,driver:'Driver 3',owner:'A'},
+ {id:'V4',type:'Truck',cap:10,h:2.5,driver:'Driver 4',owner:'A'},
+ {id:'V5',type:'Truck',cap:10,h:2.5,driver:'Driver 5',owner:'A'},
+ {id:'V6',type:'Truck',cap:10,h:2.5,driver:'Driver 6',owner:'A'},
+ {id:'V7',type:'Van',cap:3.5,h:2.0,driver:'Driver 7',owner:'A'},
+ {id:'V8',type:'Truck',cap:10,h:2.5,driver:'Driver 8',owner:'B'},
+ {id:'V9',type:'Van',cap:3.5,h:2.0,driver:'Driver 9',owner:'B'},
+ {id:'V10',type:'Truck',cap:10,h:2.5,driver:'Driver 10',owner:'C'},
+ {id:'V11',type:'Van',cap:3.5,h:2.0,driver:'Driver 11',owner:'C'},
+ {id:'V12',type:'Truck',cap:12,h:3.0,driver:'Driver 12',owner:'C'},
+ {id:'V13',type:'Van',cap:3.5,h:2.0,driver:'Driver 13',owner:'B'},
+];
+
+const WH={lat:1.3358,lng:103.7465},DEPART=480;
+function km(a,b){const R=6371,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lng-a.lng)*r;
+ const x=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
+function serviceMin(s){return 15+8*s.cbm}
+function run(seq,dep){let t=dep,pos=WH,late=0,dist=0,out=[];
+ for(const s of seq){const d=km(pos,s);dist+=d;t+=d*2.7;const arr=t;let wait=0;
+  if(s.win&&s.win[0]!=null&&t<s.win[0]){wait=s.win[0]-t;t=s.win[0];}
+  let l=0;if(s.win&&s.win[1]!=null&&t>s.win[1]){l=t-s.win[1];late+=l;}
+  out.push({stop:s,eta:t,arrive:arr,wait,late:l});t+=serviceMin(s);pos=s;}
+ return {legs:out,late,dist,end:t,depart:dep};}
+// plan: leave the yard as late as possible without making anything late, so vans do not sit waiting
+function evalRoute(seq){let dep=DEPART,r=run(seq,dep);
+ for(let i=0;i<6;i++){const f=r.legs.find(l=>l.wait>0);if(!f)break;
+  const r2=run(seq,dep+f.wait);if(r2.late>r.late+1e-9)break;dep+=f.wait;r=r2;}
+ r.dur=r.end-r.depart;return r;}
+function score(r){return r.late*1000+r.dur+r.dist}
+function perms(a,f){const n=a.length;const c=Array(n).fill(0);f(a.slice());let i=0;
+ while(i<n){if(c[i]<i){const k=i%2?c[i]:0;[a[k],a[i]]=[a[i],a[k]];f(a.slice());c[i]++;i=0}else{c[i]=0;i++}}}
+function bestSeq(stops){if(stops.length<=1)return stops.slice();
+ if(stops.length>8){return stops.slice().sort((a,b)=>(a.win?.[1]??9999)-(b.win?.[1]??9999))}
+ let best=null,bs=Infinity;perms(stops,p=>{const s=score(evalRoute(p));if(s<bs){bs=s;best=p}});return best;}
+function fits(v,seq){const cbm=seq.reduce((a,s)=>a+s.cbm,0);if(cbm>v.cap+1e-9)return false;
+ if(seq.some(s=>s.maxH&&v.h>s.maxH))return false;return true;}
+function solve(stops,vehicles,allowed){
+ const routes={};const un=[];
+ const order=stops.slice().sort((a,b)=>b.cbm-a.cbm);
+ for(const s of order){let best=null,bs=Infinity;
+  for(const v of vehicles){if(!allowed(v,s))continue;const cur=routes[v.id]||[];const trial=cur.concat([s]);
+   if(!fits(v,trial))continue;const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0)continue;
+   if(r.dur>600)continue;
+   const baseDur=cur.length?evalRoute(cur).dur:0;
+   const sc=(cur.length?0:150+v.cap*8)+(r.dur-baseDur)+r.dist*0.5;
+   if(sc<bs){bs=sc;best={v,seq}}}
+  if(best)routes[best.v.id]=best.seq;else un.push(s);}
+ return {routes,unassigned:un};}
+
+const KNOWN_NAMES=["HEAP SENG GROUP PTE LTD", "Best Denki (Singapore) Pte Ltd (Vivo City)", "Best Denki (Singapore) Pte Ltd (Jurong Point Mall)", "Best Denki (Singapore) Pte Ltd (IMM)", "Kong Tai Electrical Pte Ltd", "Best Denki (Singapore) Pte Ltd (Funan Mall)", "Best Denki (Singapore) Pte Ltd (Great World)", "Best Denki (Singapore) Pte Ltd (Plaza Singapura)", "Best Denki (Singapore) Pte Ltd (Ngee Ann)", "NTUC  LIMAU", "Best Denki (Singapore) Pte Ltd (Waterway Point)", "Best Denki (Singapore) Pte Ltd (Junction 8)", "NTUC Fairprice Co-Operative Ltd (Bedok North)", "NTUC FAIRPRICE CO-OPERATIVE LTD (HYPER PARKWAY PARADE)", "Best Denki (Singapore) Pte Ltd (Parkway)", "NTUC Fairprice Co-Operative Ltd (Hougang Point)", "Parisilk Electronics & Computers Pte Ltd (Changi South)", "NTUC  WHITESANDS", "NTUC  PLQ", "Best Denki (Singapore) Pte Ltd (Bedok Mall)", "Best Denki (Singapore) Pte Ltd (Digital Clementi)"];
+const FLEET_DEFAULT={"source": "Hub_Fleet_Master_List.xlsx", "types": [{"name": "Van", "ac": "No", "cbmRaw": "3.5-4"}, {"name": "14 footer", "ac": "No", "cbmRaw": "8-9"}, {"name": "14 footer (AC)", "ac": "Yes", "cbmRaw": null}, {"name": "24 footer", "ac": "No", "cbmRaw": "10-15"}, {"name": "24 footer (AC)", "ac": "Yes", "cbmRaw": null}, {"name": "Lorry crane", "ac": "No", "cbmRaw": null}, {"name": "Prime mover", "ac": "No", "cbmRaw": null}, {"name": "Trailer 20 ft", "ac": "No", "cbmRaw": "9-10"}, {"name": "Trailer 40 ft", "ac": "No", "cbmRaw": "20-21"}], "vehicles": []};
+</script>
+<script>
+/* ---------- helpers ---------- */
+const TEMPLATES=STOPS.filter(s=>s.cust==='GroupeSeb');
+const norm=s=>String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]+/g,'');
+const KNOWN={};KNOWN_NAMES.forEach((n,i)=>{KNOWN[norm(n)]=TEMPLATES[i]});
+const CONFLICT={
+ G17:{what:'Address and delivery window',order:'43 Changi South Ave 2 #03-03, S(486164). Window 12:00–15:00.',master:'39 Changi South Ave 2 #04-02, S(486352). "Deliver by 2PM".'},
+ G21:{what:'Delivery window',order:'Between 14:00 and 16:00.',master:'"Before 3pm / Sat till 1pm".'}};
+const REVIEW=['noaddr','postal','conflict'];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>{t=Math.round(t);return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0')};
+const winText=s=>!s.win?'Any time':(s.win[0]==null?'Before '+fmt(s.win[1]):fmt(s.win[0])+'–'+fmt(s.win[1]));
+const m3=x=>x.toFixed(2);
+const clone=o=>JSON.parse(JSON.stringify(o));
+const plural=(n,w)=>n+' '+w+(n===1?'':'s');
+const kb=n=>n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+
+/* ---------- reading the Excel files ---------- */
+function t24(h,m,ap){h=+h;m=+(m||0);if(ap){ap=ap.toLowerCase();if(ap==='pm'&&h<12)h+=12;if(ap==='am'&&h===12)h=0;}return h*60+m;}
+function parseWin(txt){
+ const t=String(txt||'').replace(/\s+/g,' ').replace(/sat(?:urday)?s?\s*(?:till|until|before|by)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/ig,'');
+ const m=t.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+ if(m){const a=t24(m[1],m[2],m[3]||m[6]);let b=t24(m[4],m[5],m[6]);if(b<=a&&/am/i.test(m[6])&&+m[4]===12)b=720;if(b>a)return [a,b];}
+ const ends=[];const re=/(?:before|by|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;let x;
+ while((x=re.exec(t)))ends.push(t24(x[1],x[2],x[3]));
+ if(ends.length)return [null,Math.min(...ends)];
+ return null;}
+function parseHeight(txt){const m=String(txt||'').match(/(?:below|under)\s*(\d(?:\.\d)?)\s*m\b/i);return m?+m[1]:null}
+function fmtDate(v){
+ if(v instanceof Date&&!isNaN(v)){v=new Date(v.getTime()+12*3600e3);return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0')}
+ if(false)return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+ const m=String(v||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+ if(m){const y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');}
+ return '';}
+const niceDate=d=>{if(!d)return '';const [y,m,dd]=d.split('-');return +dd+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]+' '+y};
+function parseSheet(rows){
+ for(let i=0;i<Math.min(rows.length,15);i++){
+  const h=(rows[i]||[]).map(c=>String(c==null?'':c).trim().toLowerCase());
+  const iDoc=h.indexOf('doc. no.'),iCbm=h.indexOf('cbm'),iName=h.indexOf('customer name');
+  if(iDoc<0||iCbm<0||iName<0)continue;
+  const iDate=h.indexOf('delivery date'),iCode=h.indexOf('customer code'),iRef=h.indexOf('customer ref. no.'),iQty=h.indexOf('qty');
+  let iRem=h.findIndex(x=>/remark|instruction/.test(x));if(iRem<0&&iDate>=0&&h[iDate+1]==='')iRem=iDate+1;
+  const orders=[];
+  for(let r=i+1;r<rows.length;r++){const row=rows[r]||[];const doc=row[iDoc],cbm=row[iCbm];
+   if(doc==null||doc===''||typeof cbm!=='number')continue;
+   const remarks=iRem>=0&&row[iRem]!=null?String(row[iRem]).trim():'';
+   orders.push({doc:String(doc),code:iCode>=0?row[iCode]:null,name:String(row[iName]||'').replace(/\s+/g,' ').trim(),ref:iRef>=0?row[iRef]:'',date:fmtDate(iDate>=0?row[iDate]:''),remarks,qty:iQty>=0?+row[iQty]||0:0,cbm:Math.round(cbm*100000)/100000,
+    type:/^CA/i.test(String(doc))||/collect/i.test(remarks)?'Collection':'Delivery',cust:'GroupeSeb'});}
+  return orders;}
+ return null;}
+async function readFile(f){
+ const entry={name:f.webkitRelativePath||f.name,size:f.size,status:'reading'};
+ try{
+  if(typeof XLSX==='undefined'){entry.status='bad';entry.msg='The Excel reader did not load. Check the internet connection and reload the page.';return entry;}
+  const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});
+  const seen=[];
+  for(const sn of wb.SheetNames){
+   const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null,blankrows:false});
+   const orders=parseSheet(rows);
+   if(orders&&orders.length){entry.status='ok';entry.format='GroupeSeb Open Items List';entry.sheet=sn;entry.orders=orders;entry.dates=[...new Set(orders.map(o=>o.date).filter(Boolean))];return entry;}
+   seen.push(sn+(rows[0]?': '+rows[0].filter(c=>c!=null).slice(0,6).join(', '):''));}
+  entry.status='bad';entry.msg='This layout is not recognised yet. Each customer needs its own converter, so send a sample file to add it.';entry.seen=seen.slice(0,3);
+ }catch(e){entry.status='bad';entry.msg='This file could not be read. Check that it is a valid Excel or CSV file.';}
+ return entry;}
+
+/* ---------- stops from orders ---------- */
+function buildStops(files){
+ const groups=new Map();
+ files.filter(f=>f.status==='ok').forEach(f=>f.orders.forEach(o=>{const k=norm(o.name);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(o)}));
+ const stops=[];let u=0;const orders={};
+ for(const [k,os] of groups){
+  const tpl=KNOWN[k];const dels=os.filter(o=>o.type==='Delivery');
+  let win=null;for(const o of (dels.length?dels:os)){const w=parseWin(o.remarks);if(w){win=w;break}}
+  const types=[...new Set(os.map(o=>o.type))];
+  const maxH=os.map(o=>parseHeight(o.remarks)).find(x=>x)||(tpl&&tpl.maxH)||null;
+  const cbm=os.reduce((a,o)=>a+o.cbm,0);
+  const base=tpl?clone(tpl):{id:'U'+(++u),cust:'GroupeSeb',name:os[0].name,area:'Not on master list',lat:WH.lat,lng:WH.lng,noloc:true,addrSrc:'missing',addr:'Not on master list',flags:['noaddr','newship'],
+   raw:(dels[0]||os[0]).remarks,read:win?'Window read from the remarks: '+winText({win})+'.':'No time window found in the remarks.'};
+  const s=Object.assign(base,{n:os.length,cbm:Math.round(cbm*1000)/1000,types,win:win||(tpl?tpl.win:null),maxH:maxH||undefined});
+  s.flags=s.flags.filter(f=>f!=='mixed'&&f!=='coll');
+  if(types.length>1)s.flags.push('mixed');else if(types[0]==='Collection')s.flags.push('coll');
+  if(maxH&&!s.flags.includes('height'))s.flags.push('height');
+  stops.push(s);orders[s.id]=os;}
+ return {stops,orders};}
+
+/* ---------- grouping into routes ---------- */
+function groupRoutes(stops){
+ const routes=[];const P={dw:1,ww:.3,open:25,maxDur:420};
+ for(const s of stops.slice().sort((a,b)=>b.cbm-a.cbm)){let best=null,bs=Infinity;
+  for(const rt of routes){if(s.noloc||rt.seq.some(x=>x.noloc))continue;
+   const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=fleetCap(trial.some(x=>x.maxH));if(cbm>cap+1e-9)continue;
+   const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0||r.dur>P.maxDur)continue;
+   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww;
+   if(sc<bs){bs=sc;best={rt,seq}}}
+  if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s]});}
+ routes.sort((a,b)=>evalRoute(a.seq).depart-evalRoute(b.seq).depart||evalRoute(a.seq).end-evalRoute(b.seq).end);
+ return routes.map((r,i)=>({id:'R'+(i+1),n:i+1,label:routeLabel(r.seq),ids:r.seq.map(s=>s.id)}));}
+function routeLabel(seq){
+ if(seq.length===1&&seq[0].noloc)return 'Location not on file';
+ const a=[...new Set(seq.filter(s=>!s.noloc).map(s=>s.area))];return a.slice(0,3).join(' · ')+(a.length>3?' +'+(a.length-3)+' more':'');}
+
+/* ---------- state ---------- */
+let S={},ORDERS={};
+const state={step:'orders',q:'',files:[],fleet:null,plan:'lo',photos:{},routes:[],approved:{},resolved:{},open:null,orders:{},next:1,over:false,busy:false};
+let INITIAL=[];
+let toastT;
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>e.hidden=true,2800)}
+const key=(id,f)=>id+':'+f;
+const pendingFlags=s=>s.flags.filter(f=>REVIEW.includes(f)&&!state.resolved[key(s.id,f)]);
+const allStops=()=>Object.values(S);
+
+
+/* ---------- fleet master list ---------- */
+function parseRange(v){
+ if(v==null||v==='')return null;
+ if(typeof v==='number')return isFinite(v)?{lo:v,hi:v}:null;
+ const s=String(v).replace(/,/g,'');
+ const m=s.match(/(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)/i);
+ if(m){let a=+m[1],b=+m[2];if(b<a)[a,b]=[b,a];return {lo:a,hi:b};}
+ const n=s.match(/\d+(?:\.\d+)?/);return n?{lo:+n[0],hi:+n[0]}:null;}
+const kindOf=n=>/trailer/i.test(n)?'trailer':/crane|prime\s*mover/i.test(n)?'special':'rigid';
+function fleetFromRaw(raw){
+ const types=raw.types.map(t=>Object.assign({},t,{cbm:t.cbm||parseRange(t.cbmRaw),pallets:t.pallets||parseRange(t.palletsRaw),kind:kindOf(t.name)}));
+ return {source:raw.source,types,vehicles:raw.vehicles||[],loaded:raw.loaded||null};}
+function readFleetBook(wb,name){
+ const find=n=>wb.SheetNames.find(s=>s.trim().toLowerCase()===n);
+ const sv=find('vehicle types'),sf=find('fleet list');
+ if(!sv)return {error:'This does not look like the Hub fleet master list: there is no "Vehicle Types" sheet.'};
+ const grid=sn=>XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null,blankrows:false,cellDates:true});
+ const txt=v=>v==null?'':(v instanceof Date?fmtDate(v):String(v).trim());
+ const rows=grid(sv);const hi=rows.findIndex(r=>r&&String(r[0]||'').trim().toLowerCase()==='vehicle type');
+ if(hi<0)return {error:'The "Vehicle Types" sheet has no "Vehicle type" header row.'};
+ const h=rows[hi].map(c=>String(c==null?'':c).trim().toLowerCase());
+ const ix=k=>h.findIndex(x=>x.startsWith(k));
+ const c={name:ix('vehicle type'),use:ix('what it is used'),not:ix('not suitable'),ac:ix('temp'),pal:ix('practical pallets'),cbm:ix('practical cbm'),dbl:ix('double'),pay:ix('max payload'),ht:ix('overall height'),rule:ix('special rule'),photo:ix('photo'),basis:ix('basis'),by:ix('verified'),rev:ix('last reviewed')};
+ const g=(r,k)=>c[k]>=0?r[c[k]]:null;
+ const types=[];
+ for(const r of rows.slice(hi+1)){const nm=txt(r[c.name]);if(!nm||/^starter type names/i.test(nm)||/^example/i.test(nm))continue;
+  const ac=txt(g(r,'ac')).toLowerCase();
+  types.push({name:nm,use:txt(g(r,'use')),notFor:txt(g(r,'not')),ac:ac==='yes'?true:ac==='no'?false:null,cbmRaw:g(r,'cbm'),palletsRaw:g(r,'pal'),dbl:txt(g(r,'dbl')),payload:g(r,'pay'),height:g(r,'ht'),rule:txt(g(r,'rule')),photo:txt(g(r,'photo')),basis:txt(g(r,'basis')),by:txt(g(r,'by')),reviewed:txt(g(r,'rev'))});}
+ const vehicles=[];
+ if(sf){const fr=grid(sf);const fi=fr.findIndex(r=>r&&String(r[0]||'').trim().toLowerCase()==='plate no.');
+  if(fi>=0){const fh=fr[fi].map(x=>String(x==null?'':x).trim().toLowerCase());const fx=k=>fh.findIndex(x=>x.startsWith(k));
+   const d={plate:fx('plate'),type:fx('vehicle type'),own:fx('ownership'),st:fx('status'),pair:fx('paired'),op:fx('override pallets'),oc:fx('override cbm'),ct:fx('cartrack'),drv:fx('default driver'),note:fx('notes')};
+   const gv=(r,k)=>d[k]>=0?r[d[k]]:null;
+   for(const r of fr.slice(fi+1)){const pl=txt(r[d.plate]);if(!pl||/^example/i.test(pl))continue;
+    vehicles.push({plate:pl,type:txt(gv(r,'type')),own:txt(gv(r,'own')),status:txt(gv(r,'st')),pair:txt(gv(r,'pair')),oPal:parseRange(gv(r,'op')),oCbm:parseRange(gv(r,'oc')),cartrack:txt(gv(r,'ct')),driver:txt(gv(r,'drv')),note:txt(gv(r,'note'))});}}}
+ return {raw:{source:name,types,vehicles}};}
+async function readFleetFile(f){
+ try{
+  if(typeof XLSX==='undefined')return {error:'The Excel reader did not load. Check the internet connection and reload the page.'};
+  const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});
+  const r=readFleetBook(wb,f.name);if(r.error)return r;
+  if(!r.raw.types.length)return {error:'The "Vehicle Types" sheet has no vehicle types filled in.'};
+  const fl=fleetFromRaw(r.raw);fl.loaded=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});return {fleet:fl};
+ }catch(e){return {error:'This file could not be read. Check that it is the filled-in Hub fleet master list (.xlsx).'}}}
+/* planning value of a type: lower or upper end of the practical range */
+const pv=t=>t.cbm?(state.plan==='hi'?t.cbm.hi:t.cbm.lo):null;
+const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).sort((a,b)=>pv(a)-pv(b)):[];
+const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).sort((a,b)=>pv(a)-pv(b)):[];
+function fleetCap(height){const r=rigidTypes();const cap=r.length?pv(r[r.length-1]):12;return height?Math.min(cap,10):cap;}
+function vehicleNeed(cbm,height){
+ const r=rigidTypes();
+ if(!r.length)return cbm<=12?'Truck (fleet list has no m³ yet)':null;
+ const fit=r.find(t=>pv(t)>=cbm-1e-9&&(!height||pv(t)<=10||t===r[r.length-1]));
+ if(fit&&!(height&&cbm>10))return fit.name+' (up to '+pv(fit)+' m³)'+(height?', under 2.6 m high':'');
+ if(!height){const tr=trailerTypes().find(t=>pv(t)>=cbm-1e-9);if(tr)return tr.name+' with a prime mover (up to '+pv(tr)+' m³)';}
+ return null;}
+
+/* ---------- icons ---------- */
+const ic=p=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const ICON={
+ plus:ic('<path d="M8 3v10M3 8h10"/>'),
+ file:ic('<path d="M4 1.8h5l3 3V14H4z"/><path d="M9 1.8v3h3"/>'),
+ route:ic('<circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><path d="M5.6 12H10a2 2 0 0 0 0-4H6a2 2 0 0 1 0-4h4.4"/>'),
+ check:ic('<path d="M3 8.5l3 3 7-7"/>'),
+ truck:ic('<path d="M1.5 4h8v7h-8z"/><path d="M9.5 6.5h3l2 2.2V11h-5z"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/>'),
+ box:ic('<path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3 6-3M8 8v6"/>')};
+const ICON_X=0;const CUSTOMERS=['GroupeSeb','P&G',"L'Oréal",'Chagee','Meiji','Lion','NMB','Johnson & Johnson'];
+
+/* ---------- summary of added files ---------- */
+function summary(){
+ const ok=state.files.filter(f=>f.status==='ok');
+ const b=buildStops(ok);const stops=b.stops;
+ return {ok,stops,orders:ok.reduce((a,f)=>a+f.orders.length,0),cbm:stops.reduce((a,s)=>a+s.cbm,0),fresh:stops.filter(s=>s.flags.includes('newship')).length,dates:[...new Set(ok.flatMap(f=>f.dates))]};}
+
+/* ---------- step 1: add files ---------- */
+function ordersRowsHtml(sm){
+ const q=norm(state.q);const known=s=>!!KNOWN[norm(s)];
+ const all=sm.ok.flatMap(f=>f.orders.map(o=>Object.assign({file:f.name},o)));
+ const rows=all.filter(o=>!q||norm([o.cust,o.doc,o.name,o.date,o.type,o.remarks].join(' ')).includes(q));
+ return {n:rows.length,total:all.length,html:rows.map(o=>`<tr><td>${esc(o.cust||'')}</td><td class="mono nw">${esc(o.doc)}</td><td><div class="nm">${esc(o.name)}</div>${known(o.name)?'':'<span class="chip warn">New ship-to</span>'}</td><td class="nw">${esc(niceDate(o.date)||'')}</td><td><span class="chip ${o.type==='Collection'?'info':''}">${o.type}</span></td><td class="num">${o.qty}</td><td class="num">${o.cbm.toFixed(3)}</td><td>${esc(o.remarks)}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No orders match that search.</td></tr>'};}
+function ordersCard(sm){
+ const r=ordersRowsHtml(sm);const dels=sm.ok.reduce((a,f)=>a+f.orders.filter(o=>o.type==='Delivery').length,0);
+ return `<div class="kpis">${kpi('Orders',sm.orders,plural(sm.stops.length,'ship-to'))}${kpi('Total volume',m3(sm.cbm)+' m³','across all files')}${kpi('Deliveries',dels,sm.orders-dels?plural(sm.orders-dels,'collection'):'no collections')}${kpi('Customers',new Set(sm.ok.flatMap(f=>f.orders.map(o=>o.cust))).size,plural(sm.ok.length,'file'))}</div>
+ <section class="card"><div class="ch">All delivery orders<small id="ordcount">${r.n===r.total?plural(r.total,'order'):r.n+' of '+r.total}</small></div><div class="tb"><input type="text" id="ordq" placeholder="Search customer, document, ship-to, remarks…" value="${esc(state.q)}" aria-label="Search orders"></div><div class="scroll" style="max-height:480px"><table><thead><tr><th>Customer</th><th>Doc. no.</th><th>Ship-to</th><th>Date</th><th>Type</th><th class="num">Qty</th><th class="num">m³</th><th>Remarks as sent</th></tr></thead><tbody id="ordbody">${r.html}</tbody></table></div></section>`;}
+function renderUpload(){
+ const sm=summary();
+ const list=state.files.map((f,i)=>{
+  const info=f.status==='ok'?`<span class="chip ok">Recognised</span> ${esc(f.format)}, sheet "${esc(f.sheet)}"`:f.status==='reading'?'<span class="chip warn">Reading</span>':'<span class="chip bad">Not recognised</span>';
+  const det=f.status==='ok'?`${plural(f.orders.length,'order')} · ${m3(f.orders.reduce((a,o)=>a+o.cbm,0))} m³ · delivery ${f.dates.length?f.dates.map(niceDate).join(', '):'date not found'}`
+   :f.status==='bad'?`${esc(f.msg)}${f.seen&&f.seen.length?'<br>What I found: '+f.seen.map(esc).join(' | '):''}`:'';
+  return `<div class="file ${f.status==='bad'?'bad':''}"><div><div class="fn">${esc(f.name)}</div><div class="sub">${kb(f.size)} · ${info}</div></div><button class="btn ghost sm" data-act="remove" data-i="${i}">Remove</button><div class="d2">${det}</div></div>`}).join('');
+ const multi=sm.dates.length>1?`<span class="chip warn">${sm.dates.length} different delivery dates will be routed together</span>`:'';
+ return `<div class="drop${state.over?' over':''}" id="drop"><h2>Add the delivery summaries</h2><p>Drop the Excel files here, or choose them below. A whole folder works too, so a supervisor can add everything received for the day in one go.</p>
+ <div class="row"><button class="btn" data-act="pick">Choose files</button><button class="btn ghost" data-act="pickdir">Choose a folder</button></div>
+ <span class="sub">Recognised today: the GroupeSeb Open Items List. Other customers' layouts need a converter first.</span>
+ <input type="file" id="fi" class="visually" multiple accept=".xlsx,.xls,.xlsm,.csv" aria-label="Choose Excel files"><input type="file" id="fd" class="visually" webkitdirectory multiple aria-label="Choose a folder"></div>
+ ${state.files.length?`<div class="files">${list}</div>`:''}
+ ${sm.ok.length?ordersCard(sm):''}
+ <div class="ready"><div>${sm.ok.length?`<b>${plural(sm.orders,'order')}</b> at <b>${plural(sm.stops.length,'stop')}</b>, ${m3(sm.cbm)} m³, from ${plural(sm.ok.length,'file')}. ${sm.fresh?`<span class="chip warn">${plural(sm.fresh,'new ship-to')} not on the master list</span>`:''} ${multi}`:'<span class="muted">Add at least one recognised file to continue.</span>'}</div><button class="btn" data-act="build"${sm.ok.length?'':' disabled'}>Build routes</button></div>`;}
+async function addFiles(list){
+ const files=[...list].filter(f=>/\.(xlsx|xls|xlsm|csv)$/i.test(f.name)&&!f.name.startsWith('~$'));
+ if(!files.length){toast('No Excel or CSV files found.');return}
+ for(const f of files){const e=await readFile(f);const dup=state.files.findIndex(x=>x.name===e.name&&x.size===e.size);if(dup>=0)state.files.splice(dup,1);state.files.push(e);render();}
+ toast(plural(files.length,'file')+' read.');}
+async function dropFiles(dt){
+ const out=[];
+ const walk=async en=>{if(en.isFile)await new Promise(r=>en.file(f=>{out.push(f);r()},r));else if(en.isDirectory){const rd=en.createReader();let batch;do{batch=await new Promise(r=>rd.readEntries(r,()=>r([])));for(const c of batch)await walk(c)}while(batch.length)}};
+ if(dt.items&&dt.items.length&&dt.items[0].webkitGetAsEntry){const ents=[...dt.items].map(i=>i.webkitGetAsEntry()).filter(Boolean);for(const en of ents)await walk(en)}
+ if(!out.length)out.push(...dt.files);
+ return out;}
+function build(){
+ const sm=summary();const b=buildStops(sm.ok);
+ S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
+ state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
+ state.routes=groupRoutes(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};state.step='routes';render();window.scrollTo(0,0);}
+
+/* ---------- vehicle fleet module ---------- */
+const rng=(x,u)=>x?(x.lo===x.hi?x.lo:x.lo+'–'+x.hi)+(u||''):null;
+function unitsOf(t){const v=state.fleet.vehicles.filter(x=>norm(x.type)===norm(t.name));return {all:v.length,act:v.filter(x=>!x.status||/^active$/i.test(x.status)).length};}
+function renderFleet(){
+ const fl=state.fleet;const n=fl.types.length,ready=rigidTypes().length;
+ const miss=fl.types.filter(t=>!t.cbm&&t.kind!=='special');const ranged=fl.types.filter(t=>t.cbm&&t.cbm.lo!==t.cbm.hi);
+ const cards=fl.types.map((t,i)=>{
+  const u=unitsOf(t);const ph=state.photos[t.name];
+  const notes=[];
+  if(t.kind==='special')notes.push('<span class="chip info">Special job, not pooled</span>');
+  if(t.kind==='trailer')notes.push('<span class="chip info">Needs a prime mover</span>');
+  if(t.ac===true)notes.push('<span class="chip info">Temperature-controlled</span>');
+  if(!t.cbm&&t.kind!=='special')notes.push('<span class="chip bad">No m³ yet</span>');
+  if(!t.pallets&&t.kind!=='special')notes.push('<span class="chip warn">No pallets yet</span>');
+  if(t.cbm&&t.cbm.lo!==t.cbm.hi)notes.push('<span class="chip warn">Range: planning on '+pv(t)+' m³</span>');
+  if(t.reviewed)notes.push('<span class="chip ok">Reviewed '+esc(t.reviewed)+(t.by?' by '+esc(t.by):'')+'</span>');else if(t.cbm)notes.push('<span class="chip warn">Not signed off</span>');
+  const use=planUsed(t);
+  return `<section class="card vt"><div class="vph">${ph?`<img src="${ph}" alt="${esc(t.name)}">`:`<button class="phbtn" data-act="photo" data-t="${i}">${ICON.plus}<span>Add photo</span></button>`}</div><div class="vb"><div class="vh"><b>${esc(t.name)}</b>${ph?`<button class="link" data-act="photo" data-t="${i}">Change photo</button>`:''}</div>
+  <div class="vnum"><div><span class="sub">Practical m³</span><b>${t.cbm?rng(t.cbm):'—'}</b></div><div><span class="sub">Pallets</span><b>${t.pallets?rng(t.pallets):'—'}</b></div><div><span class="sub">Units</span><b>${u.all}</b></div></div>
+  <p class="vp">${t.use?esc(t.use):'<span class="muted">What it is used for: not described yet.</span>'}</p>${t.notFor?`<p class="vp"><span class="muted">Not for:</span> ${esc(t.notFor)}</p>`:''}${t.rule?`<p class="vp"><span class="muted">Rule:</span> ${esc(t.rule)}</p>`:''}
+  <div class="why">${notes.join('')}</div><div class="sub" style="margin-top:6px">${use}</div></div></section>`}).join('');
+ const veh=fl.vehicles.length?`<section class="card"><div class="ch">Vehicles<small>${plural(fl.vehicles.length,'unit')}</small></div><div class="scroll"><table><thead><tr><th>Plate</th><th>Type</th><th>Ownership</th><th>Status</th><th class="num">m³</th><th class="num">Pallets</th><th>Driver</th><th>Notes</th></tr></thead><tbody>${fl.vehicles.map(v=>{const t=fl.types.find(x=>norm(x.name)===norm(v.type));const c=v.oCbm||(t&&t.cbm),p=v.oPal||(t&&t.pallets);return `<tr><td class="mono">${esc(v.plate)}</td><td>${esc(v.type)}${t?'':' <span class="chip bad">Unknown type</span>'}</td><td>${esc(v.own)}</td><td>${esc(v.status)}</td><td class="num">${c?rng(c):'<span class="muted">not set</span>'}</td><td class="num">${p?rng(p):'<span class="muted">not set</span>'}</td><td>${esc(v.driver)}</td><td>${esc(v.note)}</td></tr>`}).join('')}</tbody></table></div></section>`
+  :`<section class="card empty"><b>No vehicles listed yet.</b><p>The Fleet List sheet has no plate numbers, so this page knows your vehicle types but not how many of each you own or which are free. Fill in the Fleet List and add the file again.</p></section>`;
+ return `<section class="drop slim"><h2>Vehicle fleet</h2><p>Add the filled-in fleet master list to update this page. Currently showing <b>${esc(fl.source)}</b>${fl.loaded?' (added '+esc(fl.loaded)+')':' (the version you sent on 7 Oct)'}.</p><div class="row"><button class="btn" data-act="pickfleet">Add updated fleet file</button>${fl.loaded?'<button class="btn ghost" data-act="fleetreset">Back to the 7 Oct file</button>':''}</div>${state.fleetMsg?`<span class="chip bad">${esc(state.fleetMsg)}</span>`:''}
+ <input type="file" id="ff" class="visually" accept=".xlsx,.xlsm" aria-label="Choose the fleet Excel file"><input type="file" id="pf" class="visually" accept="image/*" aria-label="Choose a photo"></section>
+ <div class="kpis">${kpi('Vehicle types',n,plural(ready,'type')+' used for planning',ready?'ok':'bad')}${kpi('Vehicles listed',fl.vehicles.length,fl.vehicles.length?'':'None entered yet',fl.vehicles.length?'ok':'warn')}${kpi('Missing m³',miss.length,miss.length?'Not used for planning':'All set',miss.length?'warn':'ok')}${kpi('Largest planning truck',(rigidTypes().length?pv(rigidTypes().slice(-1)[0]):0)+' m³','',null)}</div>
+ <section class="card"><div class="ch">How should Claude size routes?<small>Each m³ figure you entered is a range</small></div><div class="plan"><button class="seg${state.plan==='lo'?' on':''}" data-act="plan" data-v="lo"><b>Lower figure</b><span>Safer. Plans a 24 footer at ${pvOf('24 footer','lo')} m³. More routes, fewer overloaded trucks.</span></button><button class="seg${state.plan==='hi'?' on':''}" data-act="plan" data-v="hi"><b>Upper figure</b><span>Tighter. Plans a 24 footer at ${pvOf('24 footer','hi')} m³. Fewer routes, but a truck may not really fit the load.</span></button></div></section>
+ <div class="vgrid">${cards}</div>${veh}
+ <p class="sub">Photos you add stay on this page only until you reload it. Planning figures come from your Excel, and I have not changed any of them.</p>`;}
+function pvOf(name,which){const t=state.fleet.types.find(x=>norm(x.name)===norm(name));return t&&t.cbm?(which==='hi'?t.cbm.hi:t.cbm.lo):'?';}
+function planUsed(t){
+ if(t.kind==='special')return 'Not used when grouping orders.';
+ if(t.ac===true)return 'Not used yet: no goods temperature data on orders.';
+ if(!t.cbm)return 'Not used for planning until m³ is filled in.';
+ return 'Used for planning at '+pv(t)+' m³.';}
+
+/* ---------- step 2: approve routes ---------- */
+function analyse(rt){
+ const seq=rt.ids.map(i=>S[i]);const e=evalRoute(seq);const cbm=seq.reduce((a,s)=>a+s.cbm,0);
+ const height=seq.some(s=>s.maxH);const need=vehicleNeed(cbm,height);const why=[];
+ const pend=seq.reduce((a,s)=>a+pendingFlags(s).length,0);
+ if(pend)why.push(plural(pend,'item')+' to confirm');
+ e.legs.filter(l=>l.late>0&&!l.stop.noloc).forEach(l=>why.push(l.stop.name+' arrives '+Math.round(l.late)+' min late'));
+ if(!need)why.push(height?'Over '+fleetCap(true)+' m³ with a 2.6 m height limit':'Over '+fleetCap(false)+' m³ and no trailer fits: split into 2 trips');
+ return {seq,e,cbm,need,why};}
+function addrCell(s){
+ const a=state.resolved[key(s.id,'noaddr')],p=state.resolved[key(s.id,'postal')];
+ if(a&&a.text)return esc(a.text);
+ if(p&&p.text)return esc(s.addr.replace(/\s*\(postal code 0 on master\)/,'')+', S('+p.text+')');
+ if(s.addrSrc==='missing')return '<span class="chip bad">Address needed</span>';
+ return esc(s.addr);}
+function noteChips(s){
+ const lbl={noaddr:s.addrSrc==='order'?'Confirm address':'Add address',postal:'Add postal code',conflict:'Order and master differ'};
+ const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to'};
+ let h='';
+ for(const f of s.flags){
+  if(REVIEW.includes(f)){const r=state.resolved[key(s.id,f)];
+   h+=r?'<span class="chip ok">Confirmed</span>':`<button class="chip btn" data-act="open" data-id="${s.id}">${lbl[f]}</button>`;}
+  else if(info[f])h+=`<span class="chip ${f==='newship'?'warn':'info'}">${info[f]}</span>`;}
+ return h;}
+function detail(s){
+ let cols='';
+ for(const f of s.flags.filter(f=>REVIEW.includes(f)&&!state.resolved[key(s.id,f)])){
+  if(f==='noaddr'&&s.addrSrc==='order')cols+=`<div><h3>Address</h3><p>The master list has no record for this stop. The order text carries an address:</p><p class="mono">${esc(s.raw)}</p><p>Proposed: <b>${esc(s.addr)}</b></p><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}">Use the order text</button></div></div>`;
+  else if(f==='noaddr')cols+=`<div><h3>Address</h3><p>${s.flags.includes('newship')?'This ship-to is not on the master list yet, so its location is not on file either.':'No master record, and the order text has no address.'} Saved addresses join the master list so the next order places correctly.</p><label for="addr-${s.id}" class="sub">Delivery address</label><input type="text" id="addr-${s.id}" placeholder="Type or paste the address"><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-input="addr-${s.id}">Save address</button></div></div>`;
+  else if(f==='postal')cols+=`<div><h3>Postal code</h3><p>The master list holds 0 for this stop.</p><label for="post-${s.id}" class="sub">Postal code</label><input type="text" id="post-${s.id}" placeholder="6 digits" inputmode="numeric" maxlength="6"><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-input="post-${s.id}">Save postal code</button></div></div>`;
+  else if(f==='conflict'){const c=CONFLICT[s.id];cols+=`<div><h3>${esc(c.what)}</h3><p><b>Order says:</b> ${esc(c.order)}</p><p><b>Master list says:</b> ${esc(c.master)}</p><label><input type="radio" name="cf-${s.id}" value="order" checked> Follow the order (current team rule)</label><label><input type="radio" name="cf-${s.id}" value="master"> Use the master list</label><div class="acts"><button class="btn sm" data-act="resolve" data-id="${s.id}" data-f="${f}" data-radio="cf-${s.id}">Confirm</button></div></div>`;}}
+ cols+=`<div><h3>How Claude read the remarks</h3><p class="mono">${esc(s.raw)}</p><p>${esc(s.read)}</p></div>`;
+ return `<tr class="det"><td colspan="7"><div class="cols">${cols}</div></td></tr>`;}
+function ordersRows(s){
+ return `<tr class="det"><td colspan="7"><table class="ord"><thead><tr><th>Doc</th><th>Remarks as sent</th><th class="num">Qty</th><th class="num">m³</th></tr></thead><tbody>${(ORDERS[s.id]||[]).map(o=>`<tr><td class="mono">${esc(o.doc)}</td><td>${esc(o.remarks)}</td><td class="num">${o.qty}</td><td class="num">${o.cbm.toFixed(3)}</td></tr>`).join('')}</tbody></table></td></tr>`;}
+function routeCard(rt,rts){
+ const a=analyse(rt);const done=!!state.approved[rt.id];
+ const moveOpts=()=>rts.map(r=>`<option value="${r.id}"${r.id===rt.id?' selected':''}>Route ${r.n}</option>`).join('')+'<option value="NEW">New route</option>';
+ let rows='';
+ a.e.legs.forEach((l,i)=>{const s=l.stop;
+  const st=l.late>0&&!s.noloc?`<span class="chip bad">Late ${Math.round(l.late)} min</span>`:l.wait>=15&&!s.noloc?`<span class="chip warn">Waits ${Math.round(l.wait)} min</span>`:'';
+  rows+=`<tr class="${pendingFlags(s).length?'flag':''}" data-row="${s.id}"><td class="mono">${i+1}</td><td><div class="nm">${esc(s.name)}</div><div class="sub">${addrCell(s)}</div><button class="link" data-act="orders" data-id="${s.id}">${state.orders[s.id]?'Hide':'Show'} ${plural(s.n,'order')}</button></td><td class="num">${m3(s.cbm)}</td><td>${esc(winText(s))}</td><td class="mono">${s.noloc?'<span class="sub">no location</span>':fmt(l.eta)+' '+st}</td><td>${noteChips(s)}</td><td><select data-act="move" data-id="${s.id}" data-from="${rt.id}" aria-label="Move ${esc(s.name)} to another route">${moveOpts()}</select></td></tr>`;
+  if(state.open===s.id)rows+=detail(s);
+  if(state.orders[s.id])rows+=ordersRows(s);});
+ const foot=done?`<div class="why"><span class="chip ok">Approved</span></div><button class="btn ghost" data-act="undo" data-id="${rt.id}">Undo approval</button>`
+  :`<div class="why">${a.why.length?a.why.map(w=>`<span class="chip bad">${esc(w)}</span>`).join(''):'<span class="chip ok">Ready to approve</span>'}</div><button class="btn" data-act="approve" data-id="${rt.id}"${a.why.length?' disabled':''}>Approve Route ${rt.n}</button>`;
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span><span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div><div class="rf">${foot}</div></section>`;}
+function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
+function renderRoutes(){
+ const rts=state.routes;const appr=rts.filter(r=>state.approved[r.id]).length;
+ const stops=allStops();const pend=stops.reduce((a,s)=>a+pendingFlags(s).length,0);
+ const tot=stops.reduce((a,s)=>a+s.cbm,0),orders=stops.reduce((a,s)=>a+s.n,0);
+ const all=appr===rts.length&&rts.length>0;
+ return `<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
+ ${all?'<div class="done-msg">All routes approved. Vehicle and driver matching comes next and stays with you for now.</div>':''}
+ ${rts.map(r=>routeCard(r,rts)).join('')}`;}
+
+/* ---------- side rail, top bar, tabs, notes ---------- */
+function renderSide(){
+ const okFiles=state.files.filter(f=>f.status==='ok').length;
+ return `<div class="ws"><span class="logo">T</span><span>Toh Guan Warehouse</span></div>
+ <button class="nav" data-act="newday">${ICON.plus}New delivery day</button>
+ <div class="navhead">Modules</div>
+ <button class="nav ${state.step==='fleet'?'on':''}" data-act="goto" data-v="fleet">${ICON.truck}Vehicle fleet<span class="r">${state.fleet.types.length} types</span></button>
+ <button class="nav ${state.step==='orders'?'on':''}" data-act="goto" data-v="orders">${ICON.box}Delivery orders<span class="r">${okFiles?summary().orders:''}</span></button>
+ <div class="navhead">Planning</div>
+ <button class="nav ${state.step==='routes'?'on':''}" data-act="goto" data-v="routes"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes<span class="r">${state.routes.length?state.routes.filter(r=>state.approved[r.id]).length+'/'+state.routes.length:''}</span></button>
+ <div class="navhead">Customer summaries</div>
+ ${CUSTOMERS.map((c,i)=>`<div class="cust"><span class="dot ${i===0?'ok':''}"></span>${esc(c)}<span class="r">${i===0?'readable':'needs sample'}</span></div>`).join('')}
+ <div class="sidefoot">Prototype. Locations are approximate and only exist for GroupeSeb ship-tos already on file.</div>`;}
+function renderTop(){
+ const step={fleet:'Vehicle fleet',orders:'Delivery orders',routes:'Approve routes'}[state.step];
+ const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button>`:'';
+ return `<div class="crumb"><span>Route Planner</span><span class="sep">/</span><b>${step}</b>${state.step==='routes'&&state.dateLabel?`<span class="sub">Delivery ${esc(state.dateLabel)}</span>`:''}</div><div class="tools">${tools}</div>`;}
+function renderTabs(){
+ return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button>`;}
+function fleetNotes(){
+ const fl=state.fleet,m=[];
+ const miss=fl.types.filter(t=>!t.cbm&&t.kind!=='special').map(t=>t.name);
+ const ranged=fl.types.filter(t=>t.cbm&&t.cbm.lo!==t.cbm.hi);
+ m.push({t:'This is the vehicle types sheet you sent. I use it to decide which vehicle a route needs and how big a route can be before it must be split.'});
+ if(ranged.length)m.push({t:`You gave ranges for ${ranged.map(t=>t.name+' ('+rng(t.cbm)+')').join(', ')}. A route needs one number, so I plan on the ${state.plan==='lo'?'lower':'upper'} end. The 24 footer is the one that matters most: ${pvOf('24 footer','lo')} to ${pvOf('24 footer','hi')} m³ is a wide gap, so please tell me which figure you trust on a normal day.`});
+ if(miss.length)m.push({t:`No m³ yet for ${miss.join(', ')}. I leave these out of planning and do not guess.`});
+ m.push({t:'No pallet counts are filled in. Orders are sized in m³ today, so pallets are stored but not used yet. If a customer ships by pallets, say so and I will plan on pallets for that customer.'});
+ if(!fl.vehicles.length)m.push({t:'There are no plate numbers in the Fleet List, so I cannot tell how many of each type you own. A route may ask for a 24 footer when you have none free.'});
+ m.push({t:'AC trucks are not used in planning, because the orders do not say which goods need chilling. Tell me how that should work and I will add it.'});
+ return m;}
+function notes(){
+ if(state.step==='fleet')return fleetNotes();
+ const m=[];
+ if(state.step==='orders'){
+  const sm=summary();const bad=state.files.filter(f=>f.status==='bad');
+  m.push({t:'Add the delivery summaries for the day. Today I can read the GroupeSeb Open Items List. Other customers need a converter, which starts from one sample file each.'});
+  if(sm.ok.length)m.push({t:`Read ${plural(sm.orders,'order')} across ${plural(sm.stops.length,'stop')}.${sm.fresh?` ${plural(sm.fresh,'ship-to')} not on the master list will need an address before their route can be approved.`:''}`,a:[{l:'Build routes',act:'build'}]});
+  if(bad.length)m.push({t:`I could not read ${bad.length===1?bad[0].name:plural(bad.length,'file')}. ${bad[0].msg}`});
+  if(sm.dates.length>1)m.push({t:'These files cover more than one delivery date. I would route them together, so check that is what you want.'});
+  return m;}
+ const rts=state.routes,stops=allStops();
+ const pend=stops.reduce((a,s)=>a+pendingFlags(s).length,0);
+ m.push({t:`${plural(stops.length,'stop')} became ${plural(rts.length,'route')} by area and time window. ${pend?`${plural(pend,'item')} need a person before the routes can be approved.`:'Nothing is blocking approval.'}`});
+ for(const r of rts){const a=analyse(r);if(!a.why.length||state.approved[r.id])continue;
+  const fix=a.seq.filter(s=>pendingFlags(s).length);
+  m.push({t:`Route ${r.n} cannot be approved yet: ${a.why.join('; ')}.`,a:fix.slice(0,3).map(s=>({l:'Fix '+s.name.replace(/^Best Denki /,''),act:'jump',id:s.id}))});}
+ for(const r of rts){const a=analyse(r);const lg=a.e.legs.find(l=>l.stop.win&&l.stop.win[0]!=null&&Math.abs(l.eta-l.stop.win[0])<1);
+  if(lg&&a.e.depart>=DEPART+30&&!lg.stop.noloc)m.push({t:`Route ${r.n} is set to leave at ${fmt(a.e.depart)} so it reaches ${lg.stop.name} as its slot opens at ${fmt(lg.stop.win[0])}. Its other stops could be delivered earlier, so you may prefer a morning start.`});}
+ const cf=stops.filter(s=>s.flags.includes('conflict'));
+ if(cf.length)m.push({t:`${cf.map(s=>s.name.replace(/ Electronics.*$/,'').replace(/^Best Denki /,'')).join(' and ')}: the order text and the master list disagree. I followed the order, as your team does.`});
+ if(stops.some(s=>s.noloc))m.push({t:`${stops.filter(s=>s.noloc).map(s=>s.name).join(', ')} ${stops.filter(s=>s.noloc).length===1?'has':'have'} no location on file, so no arrival time is estimated for ${stops.filter(s=>s.noloc).length===1?'it':'them'}.`});
+ if(rts.length&&rts.every(r=>state.approved[r.id]))m.push({t:'All routes are approved. Matching vehicles and drivers comes next and stays manual for now.'});
+ return m;}
+function renderAssist(){
+ const feed=notes().map(x=>`<div class="msg"><p class="t">${esc(x.t)}</p>${x.a&&x.a.length?`<div class="acts2">${x.a.map(b=>`<button class="act" data-act="${b.act}"${b.id?` data-id="${b.id}"`:''}>${esc(b.l)}</button>`).join('')}</div>`:''}</div>`).join('');
+ return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',routes:'Routes'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
+
+/* ---------- shell ---------- */
+function render(){
+ document.getElementById('side').innerHTML=renderSide();
+ document.getElementById('topbar').innerHTML=renderTop();
+ document.getElementById('tabs').innerHTML=renderTabs();
+ document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():renderRoutes();
+ document.getElementById('assist').innerHTML=renderAssist();
+ if(state.step==='orders')wireDrop();
+ if(state.step==='fleet')wireFleet();
+ wireSearch();}
+function wireDrop(){
+ const d=document.getElementById('drop');if(!d)return;
+ d.addEventListener('dragover',e=>{e.preventDefault();if(!state.over){state.over=true;d.classList.add('over')}});
+ d.addEventListener('dragleave',e=>{if(e.target===d){state.over=false;d.classList.remove('over')}});
+ d.addEventListener('drop',async e=>{e.preventDefault();state.over=false;d.classList.remove('over');addFiles(await dropFiles(e.dataTransfer))});
+ document.getElementById('fi').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});
+ document.getElementById('fd').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});}
+function wireFleet(){
+ const ff=document.getElementById('ff'),pf=document.getElementById('pf');if(!ff)return;
+ ff.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+  const r=await readFleetFile(f);if(r.error){state.fleetMsg=r.error;render();return}
+  r.fleet.source=f.name;state.fleet=r.fleet;state.fleetMsg='';state.routes=[];state.approved={};toast('Fleet list read: '+plural(r.fleet.types.length,'type')+', '+plural(r.fleet.vehicles.length,'vehicle')+'.');render();});
+ pf.addEventListener('change',e=>{const f=e.target.files[0];e.target.value='';if(!f||!state.photoFor)return;
+  const rd=new FileReader();rd.onload=()=>{state.photos[state.photoFor]=rd.result;render()};rd.readAsDataURL(f);});}
+function wireSearch(){
+ const q=document.getElementById('ordq');if(!q)return;
+ q.addEventListener('input',()=>{state.q=q.value;const r=ordersRowsHtml(summary());document.getElementById('ordbody').innerHTML=r.html;document.getElementById('ordcount').textContent=r.n===r.total?plural(r.total,'order'):r.n+' of '+r.total;});}
+function sequence(rt){rt.ids=bestSeq(rt.ids.map(i=>S[i])).map(s=>s.id)}
+function scrollToStop(id){const el=document.querySelector('[data-row="'+id+'"]');if(el)el.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'})}
+document.addEventListener('click',ev=>{
+ const t=ev.target.closest('[data-act]');if(!t||t.disabled)return;const a=t.dataset.act;
+ if(a==='pick')document.getElementById('fi').click();
+ else if(a==='pickdir')document.getElementById('fd').click();
+ else if(a==='remove'){state.files.splice(+t.dataset.i,1);render()}
+ else if(a==='build')build();
+ else if(a==='goto'){if(t.dataset.v==='routes'&&!state.routes.length)return;state.step=t.dataset.v;render()}
+ else if(a==='pickfleet')document.getElementById('ff').click()
+ else if(a==='fleetreset'){state.fleet=fleetFromRaw(FLEET_DEFAULT);state.fleetMsg='';toast('Back to the 7 Oct fleet file.');render()}
+ else if(a==='plan'){const had=state.routes.length;state.plan=t.dataset.v;state.routes=[];state.approved={};render();toast(had?'Planning basis changed. Build the routes again from Delivery orders.':'Planning basis changed.')}
+ else if(a==='photo'){state.photoFor=state.fleet.types[+t.dataset.t].name;document.getElementById('pf').click()}
+ else if(a==='newday'){state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.step='orders';render()}
+ else if(a==='open'){state.open=state.open===t.dataset.id?null:t.dataset.id;render()}
+ else if(a==='jump'){state.open=t.dataset.id;render();scrollToStop(t.dataset.id)}
+ else if(a==='orders'){state.orders[t.dataset.id]=!state.orders[t.dataset.id];render()}
+ else if(a==='resolve'){const id=t.dataset.id,f=t.dataset.f;let val={};
+  if(t.dataset.input){const v=document.getElementById(t.dataset.input).value.trim();if(!v){toast('Enter a value first.');return}val.text=v}
+  if(t.dataset.radio){const r=document.querySelector('input[name="'+t.dataset.radio+'"]:checked');val.choice=r?r.value:'order'}
+  state.resolved[key(id,f)]=Object.assign({ok:true},val);if(!pendingFlags(S[id]).length)state.open=null;toast('Confirmed.');render()}
+ else if(a==='approve'){state.approved[t.dataset.id]=true;render()}
+ else if(a==='undo'){delete state.approved[t.dataset.id];render()}
+ else if(a==='approveall'){let n=0;state.routes.forEach(r=>{if(!state.approved[r.id]&&!analyse(r).why.length){state.approved[r.id]=true;n++}});const left=state.routes.filter(r=>!state.approved[r.id]).length;toast(n?plural(n,'route')+' approved.'+(left?' '+left+' still need attention.':''):'No route is ready yet. Confirm the flagged items first.');render()}
+ else if(a==='reset'){state.routes=clone(INITIAL);state.approved={};state.next=INITIAL.length+1;toast('Routes reset.');render()}
+});
+document.addEventListener('change',ev=>{
+ const t=ev.target.closest('select[data-act=move]');if(!t)return;const rts=state.routes;
+ const id=t.dataset.id,from=rts.find(r=>r.id===t.dataset.from);let to;
+ if(t.value==='NEW'){const n=Math.max(0,...rts.map(r=>r.n))+1;to={id:'R'+(state.next++),n,label:'New route',ids:[]};rts.push(to)}else to=rts.find(r=>r.id===t.value);
+ if(!to||to===from){render();return}
+ from.ids=from.ids.filter(x=>x!==id);to.ids.push(id);sequence(to);if(from.ids.length)sequence(from);
+ delete state.approved[from.id];delete state.approved[to.id];
+ if(!from.ids.length)state.routes=rts.filter(r=>r!==from);
+ toast('Moved. Route '+to.n+(from.ids.length?' and Route '+from.n:'')+' need approving again.');render()});
+state.fleet=fleetFromRaw(FLEET_DEFAULT);
+render();
+
+</script>
+
+</body>
+</html>
