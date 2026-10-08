@@ -8,6 +8,7 @@ const TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TO
 const CODE = process.env.ACCESS_CODE;
 const HASH = 'hub:shiptos';
 const LOG = 'hub:shiptos:log';
+const PLAN_DAYS = 30;
 
 async function redis(cmd) {
   const r = await fetch(URL_, {
@@ -112,6 +113,36 @@ module.exports = async (req, res) => {
         if (r) out[String(it.id).slice(0, 40)] = r;
       }
       return res.status(200).json({ results: out });
+    }
+    // ---------- saved day plans (kept 30 days) ----------
+    const op = req.query && req.query.op;
+    if (op === 'saveplan' && req.method === 'POST') {
+      const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const date = clip(b.date, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !b.plan || typeof b.plan !== 'object') return res.status(400).json({ error: 'bad_plan' });
+      const plan = Object.assign({}, b.plan, { date, savedBy: clip(b.by, 60) || 'unknown', savedAt: new Date().toISOString() });
+      const json = JSON.stringify(plan);
+      if (json.length > 400000) return res.status(413).json({ error: 'too_big' });
+      await pipeline([
+        ['SET', 'hub:plan:' + date, json, 'EX', PLAN_DAYS * 86400],
+        ['ZADD', 'hub:plans', Date.parse(date + 'T00:00:00Z'), date],
+        ['ZREMRANGEBYSCORE', 'hub:plans', '-inf', Date.now() - (PLAN_DAYS + 1) * 86400000],
+      ]);
+      return res.status(200).json({ ok: true, date });
+    }
+    if (op === 'plans' && req.method === 'GET') {
+      const dates = (await redis(['ZREVRANGE', 'hub:plans', 0, PLAN_DAYS + 5])) || [];
+      if (!dates.length) return res.status(200).json({ plans: [] });
+      const vals = (await redis(['MGET'].concat(dates.map((d) => 'hub:plan:' + d)))) || [];
+      const plans = [];
+      for (const v of vals) { if (v) { try { plans.push(JSON.parse(v)); } catch (e) {} } }
+      return res.status(200).json({ plans });
+    }
+    if (op === 'plan' && req.method === 'DELETE') {
+      const date = clip(req.query.date, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
+      await pipeline([['DEL', 'hub:plan:' + date], ['ZREM', 'hub:plans', date]]);
+      return res.status(200).json({ ok: true });
     }
     if (req.method === 'GET') {
       const flat = (await redis(['HGETALL', HASH])) || [];
