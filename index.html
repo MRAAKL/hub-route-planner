@@ -775,6 +775,7 @@ async function build(){
  if(state.busy)return;state.busy=true;toast('Placing stops on the map and planning routes…');
  const sm=summary();const b=buildStops(sm.ok);
  S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
+ state.dateISO=sm.dates.slice().sort()[0]||new Date().toISOString().slice(0,10);
  state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
  try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
  state.busy=false;
@@ -921,7 +922,7 @@ function renderRoutes(){
  const all=appr===rts.length&&rts.length>0;
  const dl=`<datalist id="plates">${state.fleet.vehicles.map(v=>`<option value="${esc(v.plate)}">${esc(v.type)}</option>`).join('')}</datalist>`;
  return dl+`<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('Vehicles',state.vp?state.vp.veh.length:'-',state.vp&&state.vp.veh.some(v=>v.trips.length>1)?'some do 2 trips':'one trip each')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
- ${all?'<div class="done-msg">All routes approved. Vehicle and driver matching comes next and stays with you for now.</div>':''}
+ ${all?'<div class="done-msg">All routes approved. Type the plate and driver on each route, then press Save today&#39;s plan to keep it for 30 days.</div>':''}
  ${geoBanner()}${vehicleCard()}
  ${rts.map(r=>routeCard(r,rts)).join('')}`;}
 
@@ -936,15 +937,16 @@ function renderSide(){
  <button class="nav ${state.step==='shipto'?'on':''}" data-act="goto" data-v="shipto">${ICON.pin}Ship-to list<span class="r">${Object.keys(BOOK).length||''}</span></button>
  <div class="navhead">Planning</div>
  <button class="nav ${state.step==='routes'?'on':''}" data-act="goto" data-v="routes"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes<span class="r">${state.routes.length?state.routes.filter(r=>state.approved[r.id]).length+'/'+state.routes.length:''}</span></button>
+ <button class="nav ${state.step==='history'?'on':''}" data-act="goto" data-v="history">${ICON.box}Plan history<span class="r">30 days</span></button>
  <div class="navhead">Customer summaries</div>
  ${CUSTOMERS.map((c,i)=>`<div class="cust"><span class="dot ${i===0?'ok':''}"></span>${esc(c)}<span class="r">${i===0?'readable':'needs sample'}</span></div>`).join('')}
  <div class="sidefoot">Prototype. Locations are approximate and only exist for GroupeSeb ship-tos already on file.</div>`;}
 function renderTop(){
- const step={fleet:'Vehicle fleet',orders:'Delivery orders',shipto:'Ship-to list',routes:'Approve routes'}[state.step];
- const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button>`:'';
+ const step={fleet:'Vehicle fleet',orders:'Delivery orders',shipto:'Ship-to list',routes:'Approve routes',history:'Plan history'}[state.step];
+ const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button><button class="btn sm" data-act="saveplan">Save today's plan</button>`:'';
  return `<div class="crumb"><span>Route Planner</span><span class="sep">/</span><b>${step}</b>${state.step==='routes'&&state.dateLabel?`<span class="sub">Delivery ${esc(state.dateLabel)}</span>`:''}</div><div class="tools">${tools}</div>`;}
 function renderTabs(){
- return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="shipto" aria-selected="${state.step==='shipto'}">${ICON.pin}Ship-to list</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button>`;}
+ return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="shipto" aria-selected="${state.step==='shipto'}">${ICON.pin}Ship-to list</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button><button class="tab" role="tab" data-act="goto" data-v="history" aria-selected="${state.step==='history'}">${ICON.box}Plan history</button>`;}
 function fleetNotes(){
  const fl=state.fleet,m=[];
  const miss=fl.types.filter(t=>!t.cbm&&t.kind!=='special').map(t=>t.name);
@@ -966,6 +968,7 @@ function fleetNotes(){
  if(n)m.push({t:'The list is saved in this browser only. To share it with other managers, download it and put it in a shared folder, and they can load it here.'});
  return m;}
 function notes(){
+ if(state.step==='history')return [{t:'Press Save today\'s plan on Approve routes to keep the day: each route with its vehicle plate, driver and the order numbers at every stop.'},{t:'Plans are kept for 30 days and then removed automatically, to keep the shared storage small. Download a day to Excel if you need it longer.'},{t:'Saving a day that is already saved replaces it, so you can save again after changing a driver or plate.'}];
  if(state.step==='shipto')return shiptoNotes();
  if(state.step==='fleet')return fleetNotes();
  const m=[];
@@ -991,7 +994,7 @@ function notes(){
  return m;}
 function renderAssist(){
  const feed=notes().map(x=>`<div class="msg"><p class="t">${esc(x.t)}</p>${x.a&&x.a.length?`<div class="acts2">${x.a.map(b=>`<button class="act" data-act="${b.act}"${b.id?` data-id="${b.id}"`:''}>${esc(b.l)}</button>`).join('')}</div>`:''}</div>`).join('');
- return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',shipto:'Ship-tos',routes:'Routes'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
+ return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',shipto:'Ship-tos',routes:'Routes',history:'History'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
 
 /* ---------- shell ---------- */
 function render(){
@@ -999,7 +1002,7 @@ function render(){
  document.getElementById('side').innerHTML=renderSide();
  document.getElementById('topbar').innerHTML=renderTop();
  document.getElementById('tabs').innerHTML=renderTabs();
- document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():state.step==='shipto'?renderShipto():renderRoutes();
+ document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():state.step==='shipto'?renderShipto():state.step==='history'?renderHistory():renderRoutes();
  document.getElementById('assist').innerHTML=renderAssist();
  if(state.step==='orders')wireDrop();
  if(state.step==='fleet')wireFleet();
@@ -1059,11 +1062,14 @@ document.addEventListener('click',ev=>{
  else if(a==='pickdir')document.getElementById('fd').click();
  else if(a==='remove'){state.files.splice(+t.dataset.i,1);render()}
  else if(a==='build')build();
- else if(a==='goto'){if(t.dataset.v==='routes'&&!state.routes.length)return;state.step=t.dataset.v;render()}
+ else if(a==='goto'){if(t.dataset.v==='routes'&&!state.routes.length)return;state.step=t.dataset.v;if(t.dataset.v==='history')state.hist=null;render();if(t.dataset.v==='history')loadHist().then(render)}
  else if(a==='pickfleet')document.getElementById('ff').click()
  else if(a==='fleetreset'){state.fleet=fleetFromRaw(FLEET_DEFAULT);state.fleetMsg='';toast('Back to the 7 Oct fleet file.');render()}
  else if(a==='plan'){const had=state.routes.length;state.plan=t.dataset.v;state.routes=[];state.approved={};render();toast(had?'Planning basis changed. Build the routes again from Delivery orders.':'Planning basis changed.')}
  else if(a==='photo'){state.photoFor=state.fleet.types[+t.dataset.t].name;document.getElementById('pf').click()}
+ else if(a==='saveplan')savePlan()
+ else if(a==='hdl')dlPlan(t.dataset.d)
+ else if(a==='hdel')delPlan(t.dataset.d)
  else if(a==='newday'){state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.assign={};state.step='orders';render()}
  else if(a==='open'){state.open=state.open===t.dataset.id?null:t.dataset.id;render()}
  else if(a==='jump'){state.open=t.dataset.id;render();scrollToStop(t.dataset.id)}
@@ -1101,5 +1107,55 @@ document.addEventListener('change',ev=>{
 state.fleet=fleetFromRaw(FLEET_DEFAULT);
 render();
 if(SYNC.code)syncPull().then(()=>render());
+
+
+/* ---------- saved day plans ---------- */
+const hm=v=>v==null?'':fmt(v);
+function planPayload(){
+ const vp=state.vp||vehiclePlan();
+ const routes=state.routes.filter(r=>r.ids.length).map(rt=>{const a=analyse(rt);const as=state.assign[rt.id]||{};const v=rt._v;
+  const veh=v?vp.veh.find(x=>x.n===v.n):null;const located=!a.seq.every(s=>s.noloc);
+  return {n:rt.n,label:rt.label,vehicleNo:v?v.n:null,trip:v&&!v.unplaced?v.i+' of '+v.of:'',type:veh&&veh.vt?veh.vt:'',plate:(as.veh||'').trim(),driver:(as.drv||'').trim(),approved:!!state.approved[rt.id],cbm:+a.cbm.toFixed(2),
+   depart:located?Math.round(a.e.depart):null,back:located?Math.round(a.e.end):null,
+   stops:a.e.legs.map(l=>({name:l.stop.name,cust:l.stop.cust||'',addr:addrText(l.stop),cbm:+l.stop.cbm.toFixed(2),eta:l.stop.noloc?null:Math.round(l.eta),orders:(ORDERS[l.stop.id]||[]).map(o=>String(o.doc))}))};});
+ return {label:state.dateLabel||'',routes};}
+async function loadHist(){const r=await sapi('GET','?op=plans');state.hist={ok:r.ok,status:r.status,plans:(r.j&&r.j.plans)||[]};}
+async function savePlan(){
+ if(!state.routes.length)return;
+ if(SYNC.status!=='ok'){toast('Connect the shared list first (Ship-to list page), so the plan can be saved.');return}
+ const date=state.dateISO||new Date().toISOString().slice(0,10);
+ const p=planPayload();
+ const noPlate=p.routes.filter(r=>!r.plate||!r.driver).length;
+ try{await loadHist()}catch(e){}
+ const ex=state.hist&&state.hist.plans.find(x=>x.date===date);
+ let msg='';if(noPlate)msg+=noPlate+' of '+p.routes.length+' routes have no plate or driver yet. ';
+ if(ex)msg+='A plan for '+niceDate(date)+' was already saved by '+ex.savedBy+'. Saving replaces it. ';
+ if(msg&&!confirm(msg+'Save anyway?'))return;
+ const r=await sapi('POST','?op=saveplan',{date,plan:p});
+ state.hist=null;
+ toast(r.ok?'Plan for '+niceDate(date)+' saved for 30 days (Plan history).':r.status===401?'The access code was not accepted.':r.status===404||r.status===405?'The shared list function on this site is not updated yet.':'Could not save the plan. Try again.');}
+function histMatch(p,q){if(!q)return true;return norm(JSON.stringify([p.date,p.savedBy,p.routes.map(r=>[r.plate,r.driver,r.type,r.stops.map(s=>[s.name,s.cust,s.orders])])])).includes(q)}
+function histList(){
+ const h=state.hist;const q=norm(state.hq||'');const ps=h.plans.filter(p=>histMatch(p,q));
+ if(!ps.length)return `<section class="card empty"><b>${h.plans.length?'Nothing matches that search.':'No plans saved yet.'}</b><p>${h.plans.length?'':'Approve the routes, type plates and drivers, then press Save today\'s plan.'}</p></section>`;
+ return ps.map(p=>{const tot=p.routes.reduce((a,r)=>a+r.cbm,0);const ap=p.routes.filter(r=>r.approved).length;
+  const rows=p.routes.map(r=>`<tr><td class="mono">${r.n}</td><td>${r.vehicleNo?'Vehicle '+r.vehicleNo+(r.trip?' · trip '+esc(r.trip):''):'-'}<div class="sub">${esc(r.type)}</div></td><td class="mono nw">${r.plate?esc(r.plate):'<span class="chip warn">none</span>'}</td><td>${r.driver?esc(r.driver):'<span class="chip warn">none</span>'}</td><td class="mono nw">${r.depart!=null?fmt(r.depart)+'–'+fmt(r.back):''}</td><td>${r.stops.map(s=>`<div><b>${esc(s.name)}</b> <span class="sub">${esc(s.orders.join(', '))}</span></div>`).join('')}</td><td class="num">${m3(r.cbm)}</td></tr>`).join('');
+  return `<section class="card"><div class="ch">${esc(niceDate(p.date))}<small>${plural(p.routes.length,'route')} · ${m3(tot)} m³ · ${ap} approved · saved by ${esc(p.savedBy)} ${esc((p.savedAt||'').slice(0,16).replace('T',' '))} UTC</small></div><div class="scroll"><table><thead><tr><th>Route</th><th>Vehicle</th><th>Plate</th><th>Driver</th><th>Time</th><th>Stops and order numbers</th><th class="num">m³</th></tr></thead><tbody>${rows}</tbody></table></div><div class="rf"><div class="fa"><button class="btn ghost sm" data-act="hdel" data-d="${esc(p.date)}">Delete this day</button><button class="btn sm" data-act="hdl" data-d="${esc(p.date)}">Download Excel</button></div></div></section>`}).join('');}
+function renderHistory(){
+ if(SYNC.status!=='ok')return `<section class="card empty"><b>Connect the shared list first.</b><p>Saved plans are kept in the shared store for 30 days. Open Ship-to list, type your name and the access code, and press Connect.</p></section>`;
+ const h=state.hist;
+ if(!h)return `<section class="card empty"><b>Loading saved plans…</b></section>`;
+ if(!h.ok)return `<section class="card empty"><b>Could not load saved plans.</b><p>${h.status===401?'The access code was not accepted.':h.status===404||h.status===405?'The shared list function on this site is not updated yet.':'Try again in a moment.'}</p></section>`;
+ return `<section class="drop slim"><h2>Plan history</h2><p>Each saved day keeps the routes, the vehicle plate, the driver and the order numbers at every stop. Days are kept for 30 days, then removed automatically.</p><div class="row"><input type="text" id="hq" placeholder="Search plate, driver, customer or order number…" value="${esc(state.hq||'')}" aria-label="Search plan history" style="min-width:280px"></div></section><div id="hlist">${histList()}</div>`;}
+document.addEventListener('input',ev=>{const t=ev.target;if(t&&t.id==='hq'){state.hq=t.value;const l=document.getElementById('hlist');if(l)l.innerHTML=histList();}});
+function dlPlan(date){
+ const p=state.hist&&state.hist.plans.find(x=>x.date===date);if(!p||typeof XLSX==='undefined')return;
+ const rows=[['Delivery date','Route','Vehicle','Trip','Vehicle type','Plate','Driver','Stop no.','Ship-to','Customer','Address','Order number','Planned arrival','Stop m³']];
+ for(const r of p.routes)r.stops.forEach((s,i)=>{const docs=s.orders.length?s.orders:[''];docs.forEach((d,k)=>rows.push([p.date,'Route '+r.n,r.vehicleNo?'Vehicle '+r.vehicleNo:'',r.trip,r.type,r.plate,r.driver,i+1,s.name,s.cust,s.addr,d,k?'':hm(s.eta),k?'':s.cbm]))});
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Plan '+p.date);XLSX.writeFile(wb,'Hub-route-plan-'+p.date+'.xlsx');}
+async function delPlan(date){
+ if(!confirm('Delete the saved plan for '+niceDate(date)+'? This cannot be undone.'))return;
+ const r=await sapi('DELETE','?op=plan&date='+encodeURIComponent(date));
+ if(r.ok){await loadHist();render();toast('Deleted.')}else toast('Could not delete.');}
 
 </script>

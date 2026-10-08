@@ -41,3 +41,5 @@ Morning loading: a first trip leaves 30 min after 08:00, or 90 min after 08:00 f
 Timing used: warehouse to first customer 45 to 90 min (by distance, same for the way back); 30 to 60 min per stop for unloading and sign-off (30 min plus 3 min per m³, at most 60); between customers 2.7 min per km. Constants: legMin and serviceMin in index.html.
 
 Lunch: every driver gets a 1 hour break once the day passes 12:00 (after the stop in progress, or at the warehouse between two trips). Constants LUNCH_AT and LUNCH_MIN in index.html.
+
+Plan history (v12): "Save today's plan" on Approve routes stores the day (routes, plate, driver, order numbers) in the same Upstash store for 30 days (key hub:plan:DATE, auto-expires). Plan history page lists, searches, downloads to Excel and deletes days. This needs the updated `api/shiptos.js` as well as `index.html`.
