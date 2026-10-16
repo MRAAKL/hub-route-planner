@@ -705,6 +705,7 @@ function vehiclePlan(){
 
 /* try several groupings and keep the one that fits the vehicles listed best */
 function planDay(stops){
+ state.links={};state.tokens={};
  const cands=[];for(const open of [10,20,30,45])for(const cap of [0,12,10])for(const maxDur of [420,300])cands.push({open,cap,maxDur});
  let best=null;const fewest=state.pstyle==='fewest';
  for(const P of cands){
@@ -886,11 +887,12 @@ function routeCard(rt,rts){
   if(state.open===s.id)rows+=detail(s);
   if(state.orders[s.id])rows+=ordersRows(s);});
  const pr=`<button class="btn ghost" data-act="printroute" data-id="${rt.id}">Print route sheet</button>`;
- const foot=done?`<div class="why"><span class="chip ok">Approved</span></div><div class="fa">${pr}<button class="btn ghost" data-act="undo" data-id="${rt.id}">Undo approval</button></div>`
+ const foot=done?`<div class="why"><span class="chip ok">Approved</span></div><div class="fa">${pr}<button class="btn ghost" data-act="undo" data-id="${rt.id}">Undo approval</button><button class="btn" data-act="dispatch" data-id="${rt.id}">${(state.links||{})[rt.id]?'Update driver\'s route':'Send to driver'}</button></div>`
   :`<div class="why">${a.why.length?a.why.map(w=>`<span class="chip bad">${esc(w)}</span>`).join(''):'<span class="chip ok">Ready to approve</span>'}</div><div class="fa">${pr}<button class="btn" data-act="approve" data-id="${rt.id}"${a.why.length?' disabled':''}>Approve Route ${rt.n}</button></div>`;
  const as=state.assign[rt.id]||{};
  const asg=`<div class="asg"><label>Vehicle<input type="text" data-asg="${rt.id}" data-k="veh" value="${esc(as.veh||'')}" placeholder="Plate number" list="plates" autocomplete="off"></label><label>Driver<input type="text" data-asg="${rt.id}" data-k="drv" value="${esc(as.drv||'')}" placeholder="Driver name" autocomplete="off"></label></div>`;
- return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}<div class="rf">${foot}</div></section>`;}
+ const lk=(state.links||{})[rt.id];const lkHtml=lk?`<div class="why" style="flex-wrap:wrap"><span class="chip ok">Driver link ready</span><input type="text" readonly value="${esc(lk)}" style="flex:1 1 260px" aria-label="Driver link"><button class="btn ghost sm" data-act="copylink" data-id="${rt.id}">Copy link</button><a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent('Route '+rt.n+(as.drv?' ('+as.drv+')':'')+': '+lk)}">Send by WhatsApp</a></div>`:'';
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
 function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
 function vehicleCard(){
  const vp=state.vp;if(!vp)return '';
@@ -938,15 +940,16 @@ function renderSide(){
  <div class="navhead">Planning</div>
  <button class="nav ${state.step==='routes'?'on':''}" data-act="goto" data-v="routes"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes<span class="r">${state.routes.length?state.routes.filter(r=>state.approved[r.id]).length+'/'+state.routes.length:''}</span></button>
  <button class="nav ${state.step==='history'?'on':''}" data-act="goto" data-v="history">${ICON.box}Plan history<span class="r">30 days</span></button>
+ <button class="nav ${state.step==='deliveries'?'on':''}" data-act="goto" data-v="deliveries">${ICON.route}Driver deliveries<span class="r">PODs</span></button>
  <div class="navhead">Customer summaries</div>
  ${CUSTOMERS.map((c,i)=>`<div class="cust"><span class="dot ${i===0?'ok':''}"></span>${esc(c)}<span class="r">${i===0?'readable':'needs sample'}</span></div>`).join('')}
  <div class="sidefoot">Prototype. Locations are approximate and only exist for GroupeSeb ship-tos already on file.</div>`;}
 function renderTop(){
- const step={fleet:'Vehicle fleet',orders:'Delivery orders',shipto:'Ship-to list',routes:'Approve routes',history:'Plan history'}[state.step];
- const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button><button class="btn sm" data-act="saveplan">Save today's plan</button>`:'';
+ const step={fleet:'Vehicle fleet',orders:'Delivery orders',shipto:'Ship-to list',routes:'Approve routes',history:'Plan history',deliveries:'Driver deliveries'}[state.step];
+ const tools=state.step==='routes'?`<button class="btn ghost sm" data-act="reset">Reset routes</button><button class="btn sm" data-act="approveall">Approve all ready routes</button><button class="btn sm" data-act="dispatchall">Send approved routes to drivers</button><button class="btn sm" data-act="saveplan">Save today's plan</button>`:'';
  return `<div class="crumb"><span>Route Planner</span><span class="sep">/</span><b>${step}</b>${state.step==='routes'&&state.dateLabel?`<span class="sub">Delivery ${esc(state.dateLabel)}</span>`:''}</div><div class="tools">${tools}</div>`;}
 function renderTabs(){
- return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="shipto" aria-selected="${state.step==='shipto'}">${ICON.pin}Ship-to list</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button><button class="tab" role="tab" data-act="goto" data-v="history" aria-selected="${state.step==='history'}">${ICON.box}Plan history</button>`;}
+ return `<button class="tab" role="tab" data-act="goto" data-v="fleet" aria-selected="${state.step==='fleet'}">${ICON.truck}Vehicle fleet</button><button class="tab" role="tab" data-act="goto" data-v="orders" aria-selected="${state.step==='orders'}">${ICON.box}Delivery orders</button><button class="tab" role="tab" data-act="goto" data-v="shipto" aria-selected="${state.step==='shipto'}">${ICON.pin}Ship-to list</button><button class="tab" role="tab" data-act="goto" data-v="routes" aria-selected="${state.step==='routes'}"${state.routes.length?'':' disabled'}>${ICON.route}Approve routes</button><button class="tab" role="tab" data-act="goto" data-v="history" aria-selected="${state.step==='history'}">${ICON.box}Plan history</button><button class="tab" role="tab" data-act="goto" data-v="deliveries" aria-selected="${state.step==='deliveries'}">${ICON.route}Driver deliveries</button>`;}
 function fleetNotes(){
  const fl=state.fleet,m=[];
  const miss=fl.types.filter(t=>!t.cbm&&t.kind!=='special').map(t=>t.name);
@@ -968,6 +971,7 @@ function fleetNotes(){
  if(n)m.push({t:'The list is saved in this browser only. To share it with other managers, download it and put it in a shared folder, and they can load it here.'});
  return m;}
 function notes(){
+ if(state.step==='deliveries')return [{t:'Each approved route can be sent to its driver as a link. The driver opens it on their phone and sees the stops in order.'},{t:'At each stop the driver takes a photo of the signed paper delivery order. The paper stays the proper copy; the photo is a saved backup that you can view and download here.'},{t:'Photos are kept 14 days, then removed automatically. Download any you need to keep longer.'},{t:'A link works for the delivery day and the two days after. It is not a login, so only send it to the driver of that route.'}];
  if(state.step==='history')return [{t:'Press Save today\'s plan on Approve routes to keep the day: each route with its vehicle plate, driver and the order numbers at every stop.'},{t:'Plans are kept for 30 days and then removed automatically, to keep the shared storage small. Download a day to Excel if you need it longer.'},{t:'Saving a day that is already saved replaces it, so you can save again after changing a driver or plate.'}];
  if(state.step==='shipto')return shiptoNotes();
  if(state.step==='fleet')return fleetNotes();
@@ -994,7 +998,7 @@ function notes(){
  return m;}
 function renderAssist(){
  const feed=notes().map(x=>`<div class="msg"><p class="t">${esc(x.t)}</p>${x.a&&x.a.length?`<div class="acts2">${x.a.map(b=>`<button class="act" data-act="${b.act}"${b.id?` data-id="${b.id}"`:''}>${esc(b.l)}</button>`).join('')}</div>`:''}</div>`).join('');
- return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',shipto:'Ship-tos',routes:'Routes',history:'History'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
+ return `<div class="ah">Claude's notes<small>${{fleet:'Fleet',orders:'Orders',shipto:'Ship-tos',routes:'Routes',history:'History',deliveries:'Deliveries'}[state.step]}</small></div><div class="feed">${feed}</div><div class="ask"><b>Ask Claude about a route…</b>Not live in this prototype.</div>`;}
 
 /* ---------- shell ---------- */
 function render(){
@@ -1002,7 +1006,7 @@ function render(){
  document.getElementById('side').innerHTML=renderSide();
  document.getElementById('topbar').innerHTML=renderTop();
  document.getElementById('tabs').innerHTML=renderTabs();
- document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():state.step==='shipto'?renderShipto():state.step==='history'?renderHistory():renderRoutes();
+ document.getElementById('work').innerHTML=state.step==='fleet'?renderFleet():state.step==='orders'?renderUpload():state.step==='shipto'?renderShipto():state.step==='history'?renderHistory():state.step==='deliveries'?renderDeliveries():renderRoutes();
  document.getElementById('assist').innerHTML=renderAssist();
  if(state.step==='orders')wireDrop();
  if(state.step==='fleet')wireFleet();
@@ -1062,15 +1066,20 @@ document.addEventListener('click',ev=>{
  else if(a==='pickdir')document.getElementById('fd').click();
  else if(a==='remove'){state.files.splice(+t.dataset.i,1);render()}
  else if(a==='build')build();
- else if(a==='goto'){if(t.dataset.v==='routes'&&!state.routes.length)return;state.step=t.dataset.v;if(t.dataset.v==='history')state.hist=null;render();if(t.dataset.v==='history')loadHist().then(render)}
+ else if(a==='goto'){if(t.dataset.v==='routes'&&!state.routes.length)return;state.step=t.dataset.v;if(t.dataset.v==='history')state.hist=null;if(t.dataset.v==='deliveries'){state.dv=state.dv||{};if(!state.dv.date)state.dv.date=state.dateISO||sgToday();state.dv.trips=null}render();if(t.dataset.v==='history')loadHist().then(render);if(t.dataset.v==='deliveries')loadTrips().then(render)}
  else if(a==='pickfleet')document.getElementById('ff').click()
  else if(a==='fleetreset'){state.fleet=fleetFromRaw(FLEET_DEFAULT);state.fleetMsg='';toast('Back to the 7 Oct fleet file.');render()}
  else if(a==='plan'){const had=state.routes.length;state.plan=t.dataset.v;state.routes=[];state.approved={};render();toast(had?'Planning basis changed. Build the routes again from Delivery orders.':'Planning basis changed.')}
  else if(a==='photo'){state.photoFor=state.fleet.types[+t.dataset.t].name;document.getElementById('pf').click()}
  else if(a==='saveplan')savePlan()
+ else if(a==='dispatch')dispatchRoute(t.dataset.id,true)
+ else if(a==='dispatchall')dispatchAll()
+ else if(a==='copylink')copyLink(t.dataset.id)
+ else if(a==='dvload'){state.dv.trips=null;render();loadTrips().then(render)}
+ else if(a==='vpod')viewPod(t.dataset.t,+t.dataset.i,+t.dataset.k)
  else if(a==='hdl')dlPlan(t.dataset.d)
  else if(a==='hdel')delPlan(t.dataset.d)
- else if(a==='newday'){state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.assign={};state.step='orders';render()}
+ else if(a==='newday'){state.links={};state.tokens={};state.files=[];state.routes=[];state.approved={};state.resolved={};state.open=null;state.orders={};state.assign={};state.step='orders';render()}
  else if(a==='open'){state.open=state.open===t.dataset.id?null:t.dataset.id;render()}
  else if(a==='jump'){state.open=t.dataset.id;render();scrollToStop(t.dataset.id)}
  else if(a==='orders'){state.orders[t.dataset.id]=!state.orders[t.dataset.id];render()}
@@ -1157,5 +1166,62 @@ async function delPlan(date){
  if(!confirm('Delete the saved plan for '+niceDate(date)+'? This cannot be undone.'))return;
  const r=await sapi('DELETE','?op=plan&date='+encodeURIComponent(date));
  if(r.ok){await loadHist();render();toast('Deleted.')}else toast('Could not delete.');}
+
+
+/* ---------- send routes to drivers, and see what came back ---------- */
+const sgToday=()=>new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+function tripPayload(rt){
+ const a=analyse(rt);const as=state.assign[rt.id]||{};
+ return {n:rt.n,label:rt.label,driver:(as.drv||'').trim(),plate:(as.veh||'').trim(),
+  stops:a.e.legs.map(l=>{const s=l.stop;const be=bookGet(s.cust,s.name,s.code);
+   return {id:s.id,name:s.name,addr:addrText(s),window:winText(s),pod:be&&be.pod?be.pod:'',docs:(ORDERS[s.id]||[]).map(o=>({doc:String(o.doc),qty:o.qty,remarks:o.remarks||''}))}})};}
+async function dispatchRoute(id,verbose){
+ const rt=state.routes.find(r=>r.id===id);if(!rt)return false;
+ if(SYNC.status!=='ok'){toast('Connect the shared list first (Ship-to list page).');return false}
+ if(!state.approved[id]){toast('Approve Route '+rt.n+' first.');return false}
+ const p=tripPayload(rt);
+ if(verbose&&(!p.driver||!p.plate)&&!confirm('Route '+rt.n+' has no driver name or plate yet. Send it anyway?'))return false;
+ state.links=state.links||{};
+ const r=await sapi('POST','?op=dispatch',{date:state.dateISO||sgToday(),route:p,token:(state.tokens||{})[id]});
+ if(!r.ok){toast(r.status===404||r.status===405?'The shared list function on this site is not updated yet.':r.status===401?'The access code was not accepted.':'Could not send the route. Try again.');return false}
+ state.tokens=state.tokens||{};state.tokens[id]=r.j.token;
+ state.links[id]=location.origin+'/driver?t='+r.j.token;
+ if(verbose){toast('Route '+rt.n+' is ready for the driver. Copy the link or send it by WhatsApp.');render()}
+ return true}
+async function dispatchAll(){
+ const rts=state.routes.filter(r=>state.approved[r.id]);
+ if(!rts.length){toast('Approve at least one route first.');return}
+ const miss=rts.filter(r=>{const a=state.assign[r.id]||{};return !(a.drv||'').trim()||!(a.veh||'').trim()}).length;
+ if(miss&&!confirm(miss+' of '+rts.length+' approved routes have no driver or plate yet. Send them anyway?'))return;
+ let n=0;for(const r of rts){if(await dispatchRoute(r.id,false))n++}
+ render();toast(n+' route'+(n===1?'':'s')+' ready. Each route card now has its driver link.')}
+function copyLink(id){const u=(state.links||{})[id];if(!u)return;
+ const done=()=>toast('Link copied.');
+ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(done,()=>toast('Select the link and copy it.'));else toast('Select the link and copy it.')}
+async function loadTrips(){
+ const dv=state.dv;const r=await sapi('GET','?op=trips&date='+encodeURIComponent(dv.date));
+ dv.ok=r.ok;dv.status=r.status;dv.trips=(r.j&&r.j.trips)||[];dv.photos=dv.photos||{};}
+async function viewPod(token,i,k){
+ const key=token+':'+i+':'+k;const dv=state.dv;dv.photos=dv.photos||{};
+ if(dv.photos[key]){delete dv.photos[key];render();return}
+ const r=await sapi('GET','?op=pod&token='+token+'&idx='+i+'&k='+k);
+ dv.photos[key]=r.ok&&r.j.photo?r.j.photo:'gone';render()}
+function renderDeliveries(){
+ if(SYNC.status!=='ok')return `<section class="card empty"><b>Connect the shared list first.</b><p>Open Ship-to list, type your name and the access code, and press Connect.</p></section>`;
+ const dv=state.dv||(state.dv={date:state.dateISO||sgToday()});
+ const head=`<section class="drop slim"><h2>Driver deliveries</h2><p>What drivers have sent back from their phones. The paper stays the signed copy; the photo is the saved backup.</p><div class="row"><label class="sub" for="dvd">Delivery date</label> <input type="date" id="dvd" value="${esc(dv.date)}"> <button class="btn ghost sm" data-act="dvload">Refresh</button></div></section>`;
+ if(!dv.trips)return head+`<section class="card empty"><b>Loading…</b></section>`;
+ if(!dv.ok)return head+`<section class="card empty"><b>Could not load.</b><p>${dv.status===401?'The access code was not accepted.':dv.status===404||dv.status===405?'The shared list function on this site is not updated yet.':'Try again in a moment.'}</p></section>`;
+ if(!dv.trips.length)return head+`<section class="card empty"><b>Nothing sent to drivers for ${esc(niceDate(dv.date))}.</b><p>Approve routes, then press Send to driver on each route.</p></section>`;
+ return head+dv.trips.map(t=>{
+  const done=t.stops.filter(s=>s.state==='delivered').length,prob=t.stops.filter(s=>s.state==='problem').length,ph=t.stops.reduce((a,s)=>a+(s.photos||0),0);
+  const rows=t.stops.map((s,i)=>{
+   const chip=s.state==='delivered'?`<span class="chip ok">Delivered ${esc(hm2(s.at))}${s.photos?'':' · no photo'}</span>`:s.state==='problem'?`<span class="chip bad">Problem: ${esc(s.note||'')}</span>`:`<span class="chip">To do</span>`;
+   const btns=Array.from({length:s.photos||0},(_,k)=>`<button class="btn ghost sm" data-act="vpod" data-t="${t.token}" data-i="${i}" data-k="${k}">${state.dv.photos&&state.dv.photos[t.token+':'+i+':'+k]?'Hide':'View'} photo ${k+1}</button>`).join(' ');
+   const imgs=Array.from({length:s.photos||0},(_,k)=>{const p=state.dv.photos&&state.dv.photos[t.token+':'+i+':'+k];return p?(p==='gone'?`<div class="sub">Photo ${k+1} has been removed (older than 14 days).</div>`:`<div><img src="${p}" alt="POD photo" style="max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:6px"><div><a class="btn ghost sm" download="POD-${esc(s.name.replace(/[^A-Za-z0-9]+/g,'-'))}-${esc(t.date)}-${k+1}.jpg" href="${p}">Download</a></div></div>`):''}).join('');
+   return `<tr><td class="mono">${i+1}</td><td><div class="nm">${esc(s.name)}</div><div class="sub">${esc(s.docs.map(d=>d.doc).join(', '))}</div></td><td>${chip}${s.receivedBy?`<div class="sub">Received by ${esc(s.receivedBy)}</div>`:''}</td><td>${btns}${imgs}</td></tr>`}).join('');
+  return `<section class="card"><div class="ch">Route ${t.n}${t.driver?' · '+esc(t.driver):''}${t.plate?' · '+esc(t.plate):''}<small>${done} of ${t.stops.length} delivered${prob?' · '+prob+' problem'+(prob>1?'s':''):''} · ${ph} photo${ph===1?'':'s'} · sent by ${esc(t.dispatchedBy)}</small></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop and order numbers</th><th>Status</th><th>POD photos</th></tr></thead><tbody>${rows}</tbody></table></div></section>`}).join('');}
+const hm2=iso=>{if(!iso)return '';const d=new Date(iso);if(isNaN(d))return '';return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+document.addEventListener('change',ev=>{const t=ev.target;if(t&&t.id==='dvd'){state.dv.date=t.value;state.dv.trips=null;render();loadTrips().then(render)}});
 
 </script>

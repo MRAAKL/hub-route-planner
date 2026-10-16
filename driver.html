@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#1f3a5f">
+<title>Hub Driver</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#14181f;--sub:#5b6472;--line:#dde1e7;--brand:#1f3a5f;--ok:#1d7a46;--okbg:#e3f4ea;--bad:#b3261e;--badbg:#fbe7e5;--warn:#8a5a00;--warnbg:#fdf1d8;--btn:#1f3a5f;--btnink:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#10141a;--card:#1a2029;--ink:#eef1f5;--sub:#9aa5b4;--line:#2b3441;--brand:#7fa6d9;--ok:#6fd49a;--okbg:#17372a;--bad:#ff9a92;--badbg:#3d1f1d;--warn:#f3c76b;--warnbg:#3a2f12;--btn:#7fa6d9;--btnink:#0b1220}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:env(safe-area-inset-bottom)}
+header{background:var(--brand);color:#fff;padding:14px 16px;padding-top:max(14px,env(safe-area-inset-top))}
+@media (prefers-color-scheme:dark){header{color:#0b1220}}
+header h1{margin:0;font-size:20px}
+header p{margin:2px 0 0;font-size:14px;opacity:.9}
+main{padding:12px 16px 40px;max-width:640px;margin:0 auto}
+.bar{margin:0 0 12px;padding:10px 12px;border-radius:10px;font-size:15px}
+.bar.off{background:var(--warnbg);color:var(--warn)}
+.bar.q{background:var(--warnbg);color:var(--warn)}
+.bar.err{background:var(--badbg);color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:0 0 12px}
+.top{display:flex;gap:10px;align-items:flex-start}
+.num{flex:none;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--btnink);display:grid;place-items:center;font-weight:700;font-size:15px}
+.nm{font-weight:700;font-size:17px}
+.sub{color:var(--sub);font-size:14px}
+a.map{display:inline-block;margin-top:4px;color:var(--brand);font-weight:600;text-decoration:none;font-size:15px}
+.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:13px;font-weight:600;background:var(--line);color:var(--sub);margin:4px 6px 0 0}
+.chip.ok{background:var(--okbg);color:var(--ok)}
+.chip.bad{background:var(--badbg);color:var(--bad)}
+.chip.warn{background:var(--warnbg);color:var(--warn)}
+.docs{margin:10px 0 0;padding:0;list-style:none;font-size:15px}
+.docs li{padding:3px 0;border-top:1px dashed var(--line)}
+.docs b{font-variant-numeric:tabular-nums}
+details{margin-top:6px;font-size:14px;color:var(--sub)}
+.row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.btn,label.btn{flex:1 1 140px;min-height:48px;border-radius:12px;border:1px solid var(--btn);background:var(--btn);color:var(--btnink);font:600 16px system-ui,sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px 12px;cursor:pointer}
+.btn.ghost,label.btn.ghost{background:transparent;color:var(--btn)}
+.btn.bad{background:transparent;color:var(--bad);border-color:var(--bad)}
+.btn[disabled]{opacity:.5}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+select,input[type=text],textarea{width:100%;min-height:46px;font:16px system-ui,sans-serif;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card);color:var(--ink);margin-top:8px}
+.msg{padding:40px 16px;text-align:center;color:var(--sub)}
+.msg b{display:block;color:var(--ink);font-size:18px;margin-bottom:6px}
+.sum{display:flex;gap:8px;margin:0 0 12px}
+.sum div{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;text-align:center}
+.sum b{display:block;font-size:20px}
+</style>
+</head>
+<body>
+<header><h1 id="h1">Hub Driver</h1><p id="h2"></p></header>
+<main id="app"><div class="msg">Loading your route…</div></main>
+<script>
+(function(){
+'use strict';
+var T=(new URLSearchParams(location.search).get('t')||'').toLowerCase();
+var QK='drv_q_'+T,TK='drv_trip_'+T;
+var trip=null,online=navigator.onLine,flushing=false,errMsg='',openProblem=null,busy={};
+var app=document.getElementById('app');
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function lsGet(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
+function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}
+function queue(){return lsGet(QK,[])}
+function saveQueue(q){return lsSet(QK,q)}
+function hhmm(iso){if(!iso)return '';var d=new Date(iso);if(isNaN(d))return '';return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+function cid(){return Math.random().toString(36).slice(2,10)+Date.now().toString(36)}
+
+/* what the screen shows = server copy plus anything still waiting to upload */
+function view(){
+  var q=queue();var stops=trip.stops.map(function(s){return Object.assign({},s,{waiting:0})});
+  q.forEach(function(it){var s=stops[it.idx];if(!s)return;s.waiting++;
+    if(it.kind==='photo'){s.state='delivered';s.photos=(s.photos||0)+1;s.at=s.at||it.at;if(it.receivedBy)s.receivedBy=it.receivedBy}
+    else if(it.kind==='problem'){s.state='problem';s.note=it.note;s.at=it.at}
+    else if(it.kind==='delivered'){s.state='delivered';s.at=s.at||it.at}
+    else if(it.kind==='reset'){s.state='pending';s.note='';s.at=''}});
+  return stops}
+
+function mapUrl(s){return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(s.addr||s.name)}
+
+function render(){
+  if(!trip)return;
+  document.getElementById('h1').textContent='Route '+trip.n+(trip.driver?' · '+trip.driver:'');
+  document.getElementById('h2').textContent=(trip.plate?trip.plate+' · ':'')+trip.date;
+  var stops=view();var q=queue();
+  var done=stops.filter(function(s){return s.state==='delivered'}).length,prob=stops.filter(function(s){return s.state==='problem'}).length;
+  var h='';
+  if(!online)h+='<div class="bar off">No signal. You can keep working. Photos are saved on this phone and sent when the signal returns.</div>';
+  if(q.length)h+='<div class="bar q">'+q.length+' item'+(q.length>1?'s':'')+' waiting to send. '+(online?'<button class="btn ghost" id="retry" style="min-height:40px;margin-top:6px">Send now</button>':'Will send when online.')+'</div>';
+  if(errMsg)h+='<div class="bar err">'+esc(errMsg)+'</div>';
+  h+='<div class="sum"><div><b>'+stops.length+'</b><span class="sub">stops</span></div><div><b>'+done+'</b><span class="sub">delivered</span></div><div><b>'+prob+'</b><span class="sub">problems</span></div></div>';
+  stops.forEach(function(s,i){
+    var chip=s.state==='delivered'?'<span class="chip ok">Delivered '+hhmm(s.at)+(s.photos?' · '+s.photos+' photo'+(s.photos>1?'s':''):' · no photo')+'</span>':s.state==='problem'?'<span class="chip bad">Problem: '+esc(s.note)+'</span>':'<span class="chip">To do</span>';
+    if(s.waiting)chip+='<span class="chip warn">Waiting to send</span>';
+    h+='<section class="card"><div class="top"><div class="num">'+(i+1)+'</div><div><div class="nm">'+esc(s.name)+'</div>'
+      +(s.addr?'<div class="sub">'+esc(s.addr)+'</div><a class="map" target="_blank" rel="noopener" href="'+mapUrl(s)+'">Open in Maps</a>':'')
+      +'<div>'+chip+(s.window?'<span class="chip">'+esc(s.window)+'</span>':'')+'</div></div></div>';
+    if(s.docs&&s.docs.length){h+='<ul class="docs">'+s.docs.map(function(d){return '<li><b>'+esc(d.doc)+'</b>'+(d.qty?' · qty '+esc(d.qty):'')+(d.remarks?'<div class="sub">'+esc(d.remarks)+'</div>':'')+'</li>'}).join('')+'</ul>'}
+    if(s.pod)h+='<details><summary>Customer POD requirement</summary>'+esc(s.pod)+'</details>';
+    if(s.state==='pending'){
+      h+='<div class="row"><label class="btn" for="f'+i+'">Take photo of signed paper</label><input type="file" id="f'+i+'" data-i="'+i+'" accept="image/*" capture="environment"><button class="btn bad" data-prob="'+i+'">Problem</button></div>';
+    }else if(s.state==='delivered'){
+      h+='<div class="row"><label class="btn ghost" for="f'+i+'">Add another photo</label><input type="file" id="f'+i+'" data-i="'+i+'" accept="image/*" capture="environment"><button class="btn ghost" data-undo="'+i+'">Undo</button></div>';
+    }else{
+      h+='<div class="row"><button class="btn ghost" data-undo="'+i+'">Undo</button></div>';
+    }
+    if(openProblem===i){
+      h+='<div><select id="pr'+i+'"><option>Customer closed</option><option>Goods refused</option><option>Short or damaged goods</option><option>Cannot reach the address</option><option>Other</option></select><input type="text" id="pn'+i+'" placeholder="Short note (optional)" maxlength="120"><div class="row"><button class="btn" data-psave="'+i+'">Save problem</button><button class="btn ghost" data-pcancel="1">Cancel</button></div></div>';
+    }
+    if(busy[i])h+='<div class="sub" style="margin-top:8px">Preparing photo…</div>';
+    h+='</section>';
+  });
+  h+='<div class="row"><button class="btn ghost" id="reload">Refresh</button></div>';
+  app.innerHTML=h}
+
+/* photo -> small JPEG (long side 1280 px) so it uses little mobile data */
+function shrink(file){return new Promise(function(res,rej){
+  var url=URL.createObjectURL(file);var im=new Image();
+  im.onload=function(){URL.revokeObjectURL(url);var tries=[[1280,.6],[1100,.5],[900,.45]];
+    for(var k=0;k<tries.length;k++){var m=tries[k][0],sc=Math.min(1,m/Math.max(im.width,im.height));var c=document.createElement('canvas');c.width=Math.round(im.width*sc);c.height=Math.round(im.height*sc);
+      var g=c.getContext('2d');g.drawImage(im,0,0,c.width,c.height);var d=c.toDataURL('image/jpeg',tries[k][1]);if(d.length<=400000||k===tries.length-1)return d.length<=440000?res(d):rej(new Error('big'))}};
+  im.onerror=function(){URL.revokeObjectURL(url);rej(new Error('img'))};im.src=url})}
+
+function enqueue(item){var q=queue();item.cid=cid();item.at=new Date().toISOString();q.push(item);
+  if(!saveQueue(q)){errMsg='This phone could not keep the photo (storage full). Connect to the internet and press Send now, or free some space.';render();return false}
+  errMsg='';render();flush();return true}
+
+async function flush(){
+  if(flushing||!trip)return;var q=queue();if(!q.length)return;flushing=true;
+  try{
+    while(q.length){var it=q[0];var r;
+      try{r=await fetch('/api/driver?t='+T,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idx:it.idx,kind:it.kind,photo:it.photo,note:it.note,receivedBy:it.receivedBy,at:it.at,cid:it.cid})})}
+      catch(e){online=false;break}
+      online=true;
+      if(r.ok){var j=await r.json();trip=j.trip;lsSet(TK,trip);q.shift();saveQueue(q)}
+      else if(r.status>=500){break}
+      else{q.shift();saveQueue(q);errMsg=r.status===410?'This link has expired.':'One item could not be saved ('+r.status+'). Please try it again.'}
+      render()}
+  }finally{flushing=false;render()}}
+
+async function load(){
+  var cached=lsGet(TK,null);
+  try{var r=await fetch('/api/driver?t='+T);online=true;
+    if(r.status===404){app.innerHTML='<div class="msg"><b>This link is not valid.</b>Ask your supervisor to send it again.</div>';return}
+    if(r.status===410){app.innerHTML='<div class="msg"><b>This link has expired.</b>Ask your supervisor for today\'s link.</div>';return}
+    if(!r.ok)throw new Error('x');
+    var j=await r.json();trip=j.trip;lsSet(TK,trip)}
+  catch(e){online=false;if(cached)trip=cached;else{app.innerHTML='<div class="msg"><b>No signal.</b>Open this link once with a signal so your route can be saved on the phone.</div>';return}}
+  render();flush()}
+
+document.addEventListener('change',async function(ev){var t=ev.target;if(!t||t.type!=='file'||!t.files||!t.files[0])return;
+  var i=+t.dataset.i,f=t.files[0];t.value='';busy[i]=1;render();
+  try{var d=await shrink(f);delete busy[i];enqueue({idx:i,kind:'photo',photo:d})}
+  catch(e){delete busy[i];errMsg='The photo could not be prepared. Please take it again.';render()}});
+document.addEventListener('click',function(ev){var t=ev.target.closest('button');if(!t)return;
+  if(t.id==='retry'){flush();return}
+  if(t.id==='reload'){load();return}
+  if(t.dataset.prob!=null){openProblem=+t.dataset.prob;render();return}
+  if(t.dataset.pcancel){openProblem=null;render();return}
+  if(t.dataset.psave!=null){var i=+t.dataset.psave;var r=document.getElementById('pr'+i).value,n=document.getElementById('pn'+i).value.trim();openProblem=null;enqueue({idx:i,kind:'problem',note:r+(n?': '+n:'')});return}
+  if(t.dataset.undo!=null){if(confirm('Undo this stop and mark it as to do again? Photos already sent stay saved.'))enqueue({idx:+t.dataset.undo,kind:'reset'});return}});
+window.addEventListener('online',function(){online=true;render();flush()});
+window.addEventListener('offline',function(){online=false;render()});
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&trip&&navigator.onLine)flush()});
+if(!/^[a-f0-9]{32}$/.test(T)){app.innerHTML='<div class="msg"><b>This link is not valid.</b>Ask your supervisor to send it again.</div>'}else load();
+})();
+</script>
+</body>
+</html>

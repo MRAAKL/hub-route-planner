@@ -138,6 +138,56 @@ module.exports = async (req, res) => {
       for (const v of vals) { if (v) { try { plans.push(JSON.parse(v)); } catch (e) {} } }
       return res.status(200).json({ plans });
     }
+    // ---------- driver trips (one link per route) ----------
+    if (op === 'dispatch' && req.method === 'POST') {
+      const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const date = clip(b.date, 10);
+      const r = b.route;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !r || !Array.isArray(r.stops) || !r.stops.length) return res.status(400).json({ error: 'bad_route' });
+      let token = String(b.token || '');
+      let old = null;
+      if (/^[a-f0-9]{32}$/.test(token)) { const o = await redis(['GET', 'hub:trip:' + token]); if (o) old = JSON.parse(o); } else token = '';
+      if (!token) token = crypto.randomBytes(16).toString('hex');
+      const prev = {};
+      if (old) old.stops.forEach((s) => { prev[s.id] = s; });
+      const stops = r.stops.slice(0, 40).map((s) => {
+        const p = prev[s.id] || {};
+        return {
+          id: clip(s.id, 40), name: clip(s.name, 160), addr: clip(s.addr, 300), window: clip(s.window, 40), pod: clip(s.pod, 200),
+          docs: (Array.isArray(s.docs) ? s.docs : []).slice(0, 30).map((d) => ({ doc: clip(d.doc, 40), qty: clip(d.qty, 12), remarks: clip(d.remarks, 200) })),
+          state: p.state || 'pending', at: p.at, serverAt: p.serverAt, note: p.note, photos: p.photos || 0, receivedBy: p.receivedBy,
+        };
+      });
+      const now = new Date().toISOString();
+      const trip = {
+        token, date, n: Number(r.n) || 0, label: clip(r.label, 120), driver: clip(r.driver, 80), plate: clip(r.plate, 20),
+        createdAt: old ? old.createdAt : now, updatedAt: now, dispatchedBy: clip(b.by, 60) || 'unknown', stops, done: old ? old.done : [],
+        validUntil: Date.parse(date + 'T00:00:00+08:00') + 3 * 86400000,
+      };
+      await pipeline([
+        ['SET', 'hub:trip:' + token, JSON.stringify(trip), 'EX', 14 * 86400],
+        ['SADD', 'hub:trips:' + date, token],
+        ['EXPIRE', 'hub:trips:' + date, 15 * 86400],
+      ]);
+      return res.status(200).json({ ok: true, token });
+    }
+    if (op === 'trips' && req.method === 'GET') {
+      const date = clip(req.query.date, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
+      const toks = (await redis(['SMEMBERS', 'hub:trips:' + date])) || [];
+      if (!toks.length) return res.status(200).json({ trips: [] });
+      const vals = (await redis(['MGET'].concat(toks.map((t) => 'hub:trip:' + t)))) || [];
+      const trips = [];
+      for (const v of vals) { if (v) { try { const t = JSON.parse(v); delete t.done; trips.push(t); } catch (e) {} } }
+      trips.sort((a, b) => a.n - b.n);
+      return res.status(200).json({ trips });
+    }
+    if (op === 'pod' && req.method === 'GET') {
+      const t = String(req.query.token || ''), i = Number(req.query.idx), k = Number(req.query.k);
+      if (!/^[a-f0-9]{32}$/.test(t) || !(i >= 0 && i < 40) || !(k >= 0 && k < 4)) return res.status(400).json({ error: 'bad_ref' });
+      const photo = await redis(['GET', 'hub:pod:' + t + ':' + i + ':' + k]);
+      return res.status(200).json({ photo: photo || null });
+    }
     if (op === 'plan' && req.method === 'DELETE') {
       const date = clip(req.query.date, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
