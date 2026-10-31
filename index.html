@@ -466,7 +466,7 @@ async function geoStops(stops){
 
 /* ---------- planning rules: big orders and zones ---------- */
 const RKEY='hub_rules_v1',ZKEY='hub_zone_ov_v1';
-const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true};
+const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25};
 try{Object.assign(RULES,JSON.parse(localStorage.getItem(RKEY)||'{}'))}catch(e){}
 let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
 const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
@@ -479,11 +479,12 @@ const zkey=s=>norm(s.cust||'')+'|'+norm(s.name||'');
 const zoneOf=s=>ZOV[zkey(s)]||zoneAuto(s);
 function refreshZones(){for(const s of Object.values(S))s.zone=zoneOf(s);}
 const bigNamesList=()=>String(RULES.bigNames||'').split(',').map(x=>norm(x)).filter(Boolean);
+const isNamed=s=>{const n=norm(s.name||'');return bigNamesList().some(b=>n.includes(b))};
 function isBig(s){
- const n=norm(s.name||'');if(bigNamesList().some(b=>n.includes(b)))return true;
  if(+RULES.bigCbm>0&&s.cbm>+RULES.bigCbm)return true;
  if(RULES.roadshow&&(/road\s*show/i.test(s.name||'')||/road\s*show/i.test(JSON.stringify(ORDERS[s.id]||[]))))return true;
  return false;}
+const isPrio=s=>isNamed(s)&&!isBig(s)?1:0;
 const routeIsBig=rt=>rt.ids.length===1&&!!S[rt.ids[0]]&&isBig(S[rt.ids[0]]);
 const routeZones=rt=>[...new Set(rt.ids.map(i=>S[i]&&S[i].zone).filter(Boolean))].map(x=>ZNAME[x]).join(' + ');
 const postalOf=s=>{const m=String(s.addr||'').match(/\b(\d{6})\b/);return m?m[1]:''};
@@ -491,7 +492,7 @@ const postalOf=s=>{const m=String(s.addr||'').match(/\b(\d{6})\b/);return m?m[1]
 /* ---------- grouping into routes ---------- */
 function groupRoutes(stops,Pp,startN){
  const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420,zp:0},Pp||{});
- for(const s of stops.slice().sort((a,b)=>b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
+ for(const s of stops.slice().sort((a,b)=>(isPrio(b)-isPrio(a))||b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
   for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
    const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
@@ -729,6 +730,29 @@ function vehiclePlan(){
  state.routes.forEach(r=>{r._v=by[r.id]||null});
  return {veh,by};}
 
+
+/* ---------- merge routes across zones when that saves a vehicle ---------- */
+function vcount(routes){const keep=state.routes;state.routes=routes;let n=0,sh=0;try{const v=vehiclePlan().veh.filter(v=>!v.unplaced);n=v.length;sh=v.filter(x=>x.short).length}finally{state.routes=keep}return {n,sh}}
+function consolidate(routes,locked,startN){
+ locked=locked||[];let cur=routes.slice();
+ if(RULES.mix&&cur.length>1){
+  const dist=rs=>rs.reduce((a,r)=>{const sq=r.ids.map(i=>S[i]);return a+(sq.every(s=>s.noloc)?0:evalRoute(sq).dist)},0);
+  for(let guard=0;guard<12;guard++){
+   const base=vcount(locked.concat(cur));const d0=dist(cur);let bm=null;
+   for(let i=0;i<cur.length;i++)for(let j=i+1;j<cur.length;j++){
+    const A=cur[i],B=cur[j];const all=A.ids.concat(B.ids).map(x=>S[x]);
+    if(all.some(s=>s.noloc||isBig(s)))continue;
+    const cbm=all.reduce((a,s)=>a+s.cbm,0);if(cbm>fleetCap(all.some(s=>s.maxH))+1e-9)continue;
+    const seq=bestSeq(all);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END||e.dur>(window.MAXDAY||420))continue;
+    const trial=cur.filter((_,k)=>k!==i&&k!==j).concat([{id:A.id,n:A.n,label:routeLabel(seq),ids:seq.map(s=>s.id)}]);
+    const v=vcount(locked.concat(trial));if(v.sh>base.sh||v.n>=base.n)continue;
+    const add=dist(trial)-d0;if(add>(+RULES.mixKm||0))continue;
+    if(!bm||v.n<bm.v.n||(v.n===bm.v.n&&add<bm.add))bm={trial,v,add}}
+   if(!bm)break;cur=bm.trial}}
+ const keep=state.routes;state.routes=[];
+ cur.sort((a,b)=>{const ea=evalRoute(a.ids.map(i=>S[i])),eb=evalRoute(b.ids.map(i=>S[i]));return ea.depart-eb.depart||ea.end-eb.end});
+ const o=startN?startN-1:0;return cur.map((r,i)=>({id:'R'+(o+i+1),n:o+i+1,label:r.label,ids:r.ids}));}
+
 /* try several groupings and keep the one that fits the vehicles listed best */
 function planDay(stops,locked){
  locked=locked||[];refreshZones();
@@ -744,7 +768,7 @@ function planDay(stops,locked){
   for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
   const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
   if(!best||sc<best.sc)best={sc,routes:clone(routes)};}
- state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
+ best.routes=consolidate(best.routes,locked,startN);state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
 
 /* ---------- icons ---------- */
 const ic=p=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -920,7 +944,7 @@ function routeCard(rt,rts){
  const as=state.assign[rt.id]||{};
  const asg=`<div class="asg"><label>Vehicle<input type="text" data-asg="${rt.id}" data-k="veh" value="${esc(as.veh||'')}" placeholder="Plate number" list="plates" autocomplete="off"></label><label>Driver<input type="text" data-asg="${rt.id}" data-k="drv" value="${esc(as.drv||'')}" placeholder="Driver name" autocomplete="off"></label></div>`;
  const lk=(state.links||{})[rt.id];const lkHtml=lk?`<div class="why" style="flex-wrap:wrap"><span class="chip ok">Driver link ready</span><input type="text" readonly value="${esc(lk)}" style="flex:1 1 260px" aria-label="Driver link"><button class="btn ghost sm" data-act="copylink" data-id="${rt.id}">Copy link</button><a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent('Route '+rt.n+(as.drv?' ('+as.drv+')':'')+': '+lk)}">Send by WhatsApp</a></div>`:'';
- return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${routeZones(rt)?`<span class="chip info">${esc(routeZones(rt))}</span>`:''}${routeIsBig(rt)?'<span class="chip warn">Big order: own vehicle</span>':''}${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${routeZones(rt)?`<span class="chip info">${esc(routeZones(rt))}</span>`:''}${routeIsBig(rt)?'<span class="chip warn">Big order: own vehicle</span>':rt.ids.some(i=>S[i]&&isPrio(S[i]))?'<span class="chip info">Priority customer</span>':''}${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
 function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
 function vehicleCard(){
  const vp=state.vp;if(!vp)return '';
@@ -1244,12 +1268,13 @@ const ULBL={'14 footer':'14 footer (subcontract)','Hub drivers':'Hub drivers (24
 function rulesCard(){
  const stops=Object.values(S);if(!stops.length)return '';
  const zs=['N','S','E','W'];
- const rows=stops.filter(s=>!s.noloc).sort((a,b)=>(postalOf(a)||'999999').localeCompare(postalOf(b)||'999999')||String(a.name).localeCompare(String(b.name))).map(s=>`<tr><td class="nm">${esc(s.name)}${isBig(s)?' <span class="chip warn">big</span>':''}<div class="sub">${esc(s.area||'')}</div></td><td class="mono">${esc(postalOf(s))}</td><td class="num">${m3(s.cbm)}</td><td class="nw"><select data-zone="${esc(s.id)}" aria-label="Zone for ${esc(s.name)}">${zs.map(z=>`<option value="${z}"${s.zone===z?' selected':''}>${ZNAME[z]}</option>`).join('')}</select>${ZOV[zkey(s)]?' <span class="sub">set by you</span>':''}</td></tr>`).join('');
+ const rows=stops.filter(s=>!s.noloc).sort((a,b)=>(postalOf(a)||'999999').localeCompare(postalOf(b)||'999999')||String(a.name).localeCompare(String(b.name))).map(s=>`<tr><td class="nm">${esc(s.name)}${isBig(s)?' <span class="chip warn">big</span>':isPrio(s)?' <span class="chip info">priority</span>':''}<div class="sub">${esc(s.area||'')}</div></td><td class="mono">${esc(postalOf(s))}</td><td class="num">${m3(s.cbm)}</td><td class="nw"><select data-zone="${esc(s.id)}" aria-label="Zone for ${esc(s.name)}">${zs.map(z=>`<option value="${z}"${s.zone===z?' selected':''}>${ZNAME[z]}</option>`).join('')}</select>${ZOV[zkey(s)]?' <span class="sub">set by you</span>':''}</td></tr>`).join('');
  const nb=stops.filter(isBig).length;
  return `<section class="card"><div class="ch">Planning rules<small>1 big orders · 2 location · 3 customer timing (never broken)</small></div>
- <div class="tb"><span class="sub">Big order: a ship-to named</span> <input type="text" id="rl_names" value="${esc(RULES.bigNames)}" style="min-width:200px" aria-label="Big order names, separated by commas"> <span class="sub">or above</span> <input type="text" inputmode="decimal" id="rl_cbm" value="${esc(RULES.bigCbm)}" style="width:48px" aria-label="Big order size in cubic metres"> <span class="sub">m³,</span> <label class="sub"><input type="checkbox" id="rl_rs"${RULES.roadshow?' checked':''}> or anything marked roadshow</label></div>
+ <div class="tb"><span class="sub">Priority customers (planned first, may share a vehicle):</span> <input type="text" id="rl_names" value="${esc(RULES.bigNames)}" style="min-width:200px" aria-label="Big order names, separated by commas"> <span class="sub">anything above</span> <input type="text" inputmode="decimal" id="rl_cbm" value="${esc(RULES.bigCbm)}" style="width:48px" aria-label="Big order size in cubic metres"> <span class="sub">m³,</span> <label class="sub"><input type="checkbox" id="rl_rs"${RULES.roadshow?' checked':''}> or anything marked roadshow</label></div>
  <div class="tb"><label class="sub"><input type="checkbox" id="rl_zn"${RULES.zones?' checked':''}> Keep each route in one zone (North, South, East, West)</label> <button class="btn sm" data-act="replanall">Re-plan everything with these rules</button></div>
- <div class="tb"><span class="sub">${plural(nb,'big order')} in this day. Each gets its own vehicle first, and that vehicle may take a nearby second trip. Changing a rule does not change the routes until you press Re-plan.</span></div>
+ <div class="tb"><label class="sub"><input type="checkbox" id="rl_mix"${RULES.mix?' checked':''}> Let a route cross zones when it saves a vehicle, up to</label> <input type="text" inputmode="numeric" id="rl_mkm" value="${esc(RULES.mixKm)}" style="width:44px" aria-label="Most extra kilometres"> <span class="sub">extra km in total</span></div>
+ <div class="tb"><span class="sub">${plural(nb,'big order')} and ${plural(stops.filter(isPrio).length,'priority customer')} in this day. Each gets its own vehicle first, and that vehicle may take a nearby second trip. Changing a rule does not change the routes until you press Re-plan.</span></div>
  <details id="zdet" style="padding:0 14px 12px"${state.zopen?' open':''}><summary class="sub" style="cursor:pointer">Where each stop landed (check the zones and correct any)</summary><div class="scroll"><table><thead><tr><th>Ship-to</th><th>Postal</th><th class="num">m³</th><th>Zone</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;}
 function replanAll(){
  const hasAppr=Object.keys(state.approved).some(k=>state.approved[k]);
@@ -1261,6 +1286,8 @@ document.addEventListener('change',ev=>{const t=ev.target;if(!t)return;
  if(t.id==='rl_names'){RULES.bigNames=t.value;rulesSave();render()}
  else if(t.id==='rl_cbm'){const v=parseFloat(String(t.value).replace(',','.'));RULES.bigCbm=isFinite(v)&&v>0?v:0;rulesSave();render()}
  else if(t.id==='rl_rs'){RULES.roadshow=t.checked;rulesSave();render()}
+ else if(t.id==='rl_mix'){RULES.mix=t.checked;rulesSave();render()}
+ else if(t.id==='rl_mkm'){const v=parseFloat(String(t.value).replace(',','.'));RULES.mixKm=isFinite(v)&&v>=0?v:25;rulesSave();render()}
  else if(t.id==='rl_zn'){RULES.zones=t.checked;rulesSave();render()}
  else if(t.dataset&&t.dataset.zone){const s=S[t.dataset.zone];if(!s)return;const auto=zoneAuto(s);if(t.value===auto)delete ZOV[zkey(s)];else ZOV[zkey(s)]=t.value;zovSave();s.zone=zoneOf(s);toast('Zone saved on this computer. Press Re-plan to apply it.');render()}});
 
