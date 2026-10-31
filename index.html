@@ -463,25 +463,50 @@ async function geoStops(stops){
   else{const k=bookKeyOf(s.cust,s.name,s.code),be=BOOK[k];if(be){BOOK[k]=Object.assign({},be,{lat:hit.lat,lng:hit.lng,locsrc:hit.src});upd.push({key:k,entry:BOOK[k]})}}}
  if(upd.length){bookSave();syncPush(upd)}}
 
+
+/* ---------- planning rules: big orders and zones ---------- */
+const RKEY='hub_rules_v1',ZKEY='hub_zone_ov_v1';
+const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true};
+try{Object.assign(RULES,JSON.parse(localStorage.getItem(RKEY)||'{}'))}catch(e){}
+let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
+const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
+const zovSave=()=>{try{localStorage.setItem(ZKEY,JSON.stringify(ZOV))}catch(e){}};
+const ZNAME={N:'North',S:'South',E:'East',W:'West'};
+/* a stop belongs to the nearest of four anchor points: Woodlands/Yishun, Orchard/CBD, Tampines/Paya Lebar, Jurong */
+const ZANCH={N:[1.425,103.83],S:[1.29,103.84],E:[1.335,103.93],W:[1.34,103.70]};
+function zoneAuto(s){if(s.noloc||s.lat==null||s.lng==null)return '';let b='',bd=1e9;for(const z in ZANCH){const dy=s.lat-ZANCH[z][0],dx=s.lng-ZANCH[z][1],d=dy*dy+dx*dx;if(d<bd){bd=d;b=z}}return b;}
+const zkey=s=>norm(s.cust||'')+'|'+norm(s.name||'');
+const zoneOf=s=>ZOV[zkey(s)]||zoneAuto(s);
+function refreshZones(){for(const s of Object.values(S))s.zone=zoneOf(s);}
+const bigNamesList=()=>String(RULES.bigNames||'').split(',').map(x=>norm(x)).filter(Boolean);
+function isBig(s){
+ const n=norm(s.name||'');if(bigNamesList().some(b=>n.includes(b)))return true;
+ if(+RULES.bigCbm>0&&s.cbm>+RULES.bigCbm)return true;
+ if(RULES.roadshow&&(/road\s*show/i.test(s.name||'')||/road\s*show/i.test(JSON.stringify(ORDERS[s.id]||[]))))return true;
+ return false;}
+const routeIsBig=rt=>rt.ids.length===1&&!!S[rt.ids[0]]&&isBig(S[rt.ids[0]]);
+const routeZones=rt=>[...new Set(rt.ids.map(i=>S[i]&&S[i].zone).filter(Boolean))].map(x=>ZNAME[x]).join(' + ');
+const postalOf=s=>{const m=String(s.addr||'').match(/\b(\d{6})\b/);return m?m[1]:''};
+
 /* ---------- grouping into routes ---------- */
-function groupRoutes(stops,Pp){
- const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420},Pp||{});
- for(const s of stops.slice().sort((a,b)=>b.cbm-a.cbm)){let best=null,bs=Infinity;
-  for(const rt of routes){if(s.noloc||rt.seq.some(x=>x.noloc))continue;
+function groupRoutes(stops,Pp,startN){
+ const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420,zp:0},Pp||{});
+ for(const s of stops.slice().sort((a,b)=>b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
+  for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
    const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
-   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww;
+   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0);
    if(sc<bs){bs=sc;best={rt,seq}}}
-  if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s]});}
+  if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s],big});}
  routes.sort((a,b)=>evalRoute(a.seq).depart-evalRoute(b.seq).depart||evalRoute(a.seq).end-evalRoute(b.seq).end);
- return routes.map((r,i)=>({id:'R'+(i+1),n:i+1,label:routeLabel(r.seq),ids:r.seq.map(s=>s.id)}));}
+ const o=startN?startN-1:0;return routes.map((r,i)=>({id:'R'+(o+i+1),n:o+i+1,label:routeLabel(r.seq),ids:r.seq.map(s=>s.id)}));}
 function routeLabel(seq){
  if(seq.length===1&&seq[0].noloc)return 'Location not on file';
  const a=[...new Set(seq.filter(s=>!s.noloc).map(s=>s.area))];return a.slice(0,3).join(' · ')+(a.length>3?' +'+(a.length-3)+' more':'');}
 
 /* ---------- state ---------- */
 let S={},ORDERS={};
-const state={step:'orders',assign:{},q:'',files:[],fleet:null,plan:'hi',pstyle:'compact',units:{'Van':2,'14 footer':2,'24 footer':3,'Prime mover':1},fleet2:0,photos:{},routes:[],approved:{},resolved:{},open:null,orders:{},next:1,over:false,busy:false};
+const state={step:'orders',assign:{},q:'',files:[],fleet:null,plan:'hi',pstyle:'compact',units:{'Van':2,'14 footer':2,'24 footer':4,'Hub drivers':4,'Prime mover':1},fleet2:0,photos:{},routes:[],approved:{},resolved:{},open:null,orders:{},next:1,over:false,busy:false,deferred:[]};
 let INITIAL=[];
 let toastT;
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>e.hidden=true,2800)}
@@ -671,14 +696,15 @@ const lastOf=seq=>seq[seq.length-1];
 const morningLoad=cbm=>480+(cbm>10?MORN_BIG:MORN_SMALL);
 function assignTypes(veh){
  const left={};for(const k in state.units){const n=state.units[k];left[k]=(n===''||n==null)?Infinity:+n}
- const has=nm=>!(nm in left)||left[nm]>0;
- const take=nm=>{if(nm in left)left[nm]--};
+ const pool='Hub drivers' in left;const hub=()=>pool?left['Hub drivers']:Infinity;
+ const has=nm=>{if(!(nm in left))return true;if(pool&&/^24/.test(nm))return left[nm]>0&&hub()>0;if(pool&&/^14/.test(nm))return hub()>0||left[nm]>0;return left[nm]>0};
+ const take=nm=>{if(!(nm in left))return '';if(pool&&/^24/.test(nm)){left[nm]--;left['Hub drivers']--;return 'hub'}if(pool&&/^14/.test(nm)){if(left[nm]>0){left[nm]--;return 'sub'}left['Hub drivers']--;return 'hub'}left[nm]--;return ''};
  for(const v of veh.filter(v=>!v.unplaced).sort((a,b)=>(b.height?1:0)-(a.height?1:0)||b.cbm-a.cbm)){
-  v.vt=null;v.tight=false;v.short=false;v.prime=false;
+  v.vt=null;v.tight=false;v.short=false;v.prime=false;v.src='';
   const rg=rigidTypes().filter(t=>pv(t)>=v.cbm-1e-9&&!(v.height&&v.cbm>10));
   let pick=rg.find(t=>has(t.name));
   if(!pick&&!v.height){if(has('Prime mover'))pick=trailerTypes().find(t=>pv(t)>=v.cbm-1e-9);if(pick){v.prime=true;take('Prime mover')}}
-  if(pick){if(!v.prime)take(pick.name);v.vt=pick.name+(v.prime?' with a prime mover':'');v.tight=!!(pick.cbm&&pick.kind==='rigid'&&v.cbm>pick.cbm.lo+1e-9&&pick.cbm.lo!==pick.cbm.hi);}
+  if(pick){if(!v.prime)v.src=take(pick.name);v.vt=pick.name+(v.prime?' with a prime mover':'')+(v.src==='sub'?' (subcontractor)':'');v.tight=!!(pick.cbm&&pick.kind==='rigid'&&v.cbm>pick.cbm.lo+1e-9&&pick.cbm.lo!==pick.cbm.hi);}
   else{v.short=true;v.want=vehicleNeed(v.cbm,v.height);}
  }}
 function vehiclePlan(){
@@ -704,19 +730,21 @@ function vehiclePlan(){
  return {veh,by};}
 
 /* try several groupings and keep the one that fits the vehicles listed best */
-function planDay(stops){
- state.links={};state.tokens={};
- const cands=[];for(const open of [10,20,30,45])for(const cap of [0,12,10])for(const maxDur of [420,300])cands.push({open,cap,maxDur});
+function planDay(stops,locked){
+ locked=locked||[];refreshZones();
+ if(!locked.length){state.links={};state.tokens={};}
+ const startN=locked.length?Math.max(state.next||1,...locked.map(r=>r.n+1),...locked.map(r=>(+String(r.id).slice(1)||0)+1)):0;
+ const cands=[];for(const zp of (RULES.zones?[1e6,40]:[0]))for(const open of [10,20,30,45])for(const cap of [0,12,10])for(const maxDur of [420,300])cands.push({open,cap,maxDur,zp});
  let best=null;const fewest=state.pstyle==='fewest';
  for(const P of cands){
-  const routes=groupRoutes(stops,P);state.routes=routes;const vp=vehiclePlan();
+  const routes=groupRoutes(stops,P,startN);state.routes=locked.concat(routes);const vp=vehiclePlan();
   const placed=vp.veh.filter(v=>!v.unplaced);
   const short=placed.filter(v=>v.short).length,prime=placed.filter(v=>v.prime).length,tight=placed.filter(v=>v.tight).length;
-  let dist=0,maxDur=0,late=0;
-  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;const e=evalRoute(seq);dist+=e.dist;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
-  const sc=short*1e6+late*5e5+prime*1e5+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
+  let dist=0,maxDur=0,late=0,mixed=0;
+  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
+  const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
   if(!best||sc<best.sc)best={sc,routes:clone(routes)};}
- state.routes=best.routes;vehiclePlan();return state.routes;}
+ state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
 
 /* ---------- icons ---------- */
 const ic=p=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -780,7 +808,7 @@ async function build(){
  state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
  try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
  state.busy=false;
- state.routes=planDay(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
+ state.deferred=[];state.routes=planDay(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
 
 /* ---------- ship-to list module ---------- */
 function renderShipto(){
@@ -892,7 +920,7 @@ function routeCard(rt,rts){
  const as=state.assign[rt.id]||{};
  const asg=`<div class="asg"><label>Vehicle<input type="text" data-asg="${rt.id}" data-k="veh" value="${esc(as.veh||'')}" placeholder="Plate number" list="plates" autocomplete="off"></label><label>Driver<input type="text" data-asg="${rt.id}" data-k="drv" value="${esc(as.drv||'')}" placeholder="Driver name" autocomplete="off"></label></div>`;
  const lk=(state.links||{})[rt.id];const lkHtml=lk?`<div class="why" style="flex-wrap:wrap"><span class="chip ok">Driver link ready</span><input type="text" readonly value="${esc(lk)}" style="flex:1 1 260px" aria-label="Driver link"><button class="btn ghost sm" data-act="copylink" data-id="${rt.id}">Copy link</button><a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent('Route '+rt.n+(as.drv?' ('+as.drv+')':'')+': '+lk)}">Send by WhatsApp</a></div>`:'';
- return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${routeZones(rt)?`<span class="chip info">${esc(routeZones(rt))}</span>`:''}${routeIsBig(rt)?'<span class="chip warn">Big order: own vehicle</span>':''}${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
 function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
 function vehicleCard(){
  const vp=state.vp;if(!vp)return '';
@@ -905,9 +933,9 @@ function vehicleCard(){
   return `<tr><td class="nm">Vehicle ${v.n}</td><td>${vt}</td><td>${tripsOf(v)}</td><td class="num">${m3(tot)}</td></tr>`}).join('');
  const un=unp.length?`<tr><td class="nm">Not placed</td><td colspan="3">${unp.map(v=>{const r=state.routes.find(r=>r.id===v.trips[0].rid);return `<span class="chip warn">Route ${r?r.n:'?'}: location not on file</span>`}).join(' ')}</td></tr>`:'';
  const ukeys=Object.keys(state.units);
- const uin=ukeys.map(k=>`<label class="sub">${esc(k)} <input type="text" inputmode="numeric" maxlength="2" style="width:44px" data-unit="${esc(k)}" value="${esc(state.units[k])}"></label>`).join(' &nbsp; ');
+ const uin=ukeys.map(k=>`<label class="sub">${esc(ULBL[k]||k)} <input type="text" inputmode="numeric" maxlength="2" style="width:44px" data-unit="${esc(k)}" value="${esc(state.units[k])}"></label>`).join(' &nbsp; ');
  const status=shortN?`<span class="chip bad">${plural(shortN,'route group')} cannot be covered by the vehicles listed</span>`:`<span class="chip ok">Covered by the vehicles listed</span>`;
- return `<section class="card"><div class="ch">Vehicles needed<small>${plural(placed.length+unp.length,'vehicle')} for ${plural(state.routes.length,'trip')}</small></div><div class="tb"><label class="sub" for="pstyle">Plan for</label> <select id="pstyle"><option value="compact"${state.pstyle!=='fewest'?' selected':''}>Shorter, tidier trips (within the vehicles listed)</option><option value="fewest"${state.pstyle==='fewest'?' selected':''}>Fewest vehicles</option></select></div><div class="tb"><span class="sub">Vehicles with drivers today:</span> ${uin} ${status}</div><div class="scroll"><table><thead><tr><th>Vehicle</th><th>Type given</th><th>Trips in the day</th><th class="num">Total m³</th></tr></thead><tbody>${rows}${un}</tbody></table></div><div class="rf"><div class="why"><span class="sub">Deliveries must finish by 17:00. Drivers check and load in the morning: a first trip leaves ${MORN_SMALL} min after 08:00, or ${MORN_BIG} min for a load over 10 m³ (you said 1 to 2 hours). Several vehicles can load at the dock at the same time. Each driver gets a 1 hour lunch break once the day passes 12:00. Driving from or back to the warehouse takes 45 min (near) to 90 min (far); each stop takes 30 min (small order) to 60 min (10 m³ or more) for unloading, checking and sign-off; between customers the time is a distance estimate. A vehicle only takes a second trip if it can be back at the warehouse, hand over (${LOAD_MIN} min) and still finish inside the stops' time windows. The prime mover with trailer is used only when no rigid truck fits. The 24 footer is planned up to ${pvOf('24 footer','hi')} m³; loads above ${pvOf('24 footer','lo')} m³ are marked as a tight fit.</span></div></div></section>`;}
+ return `<section class="card"><div class="ch">Vehicles needed<small>${plural(placed.length+unp.length,'vehicle')} for ${plural(state.routes.length,'trip')}</small></div><div class="tb"><label class="sub" for="pstyle">Plan for</label> <select id="pstyle"><option value="compact"${state.pstyle!=='fewest'?' selected':''}>Shorter, tidier trips (within the vehicles listed)</option><option value="fewest"${state.pstyle==='fewest'?' selected':''}>Fewest vehicles</option></select></div><div class="tb"><span class="sub">Vehicles with drivers today:</span> ${uin} ${status} <button class="btn sm" data-act="replan">Re-plan with these vehicles</button></div><div class="tb"><span class="sub">Someone out today? Lower the numbers above and press Re-plan. Routes you approved that still have a vehicle stay exactly as they are; the rest are regrouped.</span></div><div class="scroll"><table><thead><tr><th>Vehicle</th><th>Type given</th><th>Trips in the day</th><th class="num">Total m³</th></tr></thead><tbody>${rows}${un}</tbody></table></div><div class="rf"><div class="why"><span class="sub">Deliveries must finish by 17:00. Drivers check and load in the morning: a first trip leaves ${MORN_SMALL} min after 08:00, or ${MORN_BIG} min for a load over 10 m³ (you said 1 to 2 hours). Several vehicles can load at the dock at the same time. Each driver gets a 1 hour lunch break once the day passes 12:00. Driving from or back to the warehouse takes 45 min (near) to 90 min (far); each stop takes 30 min (small order) to 60 min (10 m³ or more) for unloading, checking and sign-off; between customers the time is a distance estimate. A vehicle only takes a second trip if it can be back at the warehouse, hand over (${LOAD_MIN} min) and still finish inside the stops' time windows. The prime mover with trailer is used only when no rigid truck fits. The 24 footer is planned up to ${pvOf('24 footer','hi')} m³; loads above ${pvOf('24 footer','lo')} m³ are marked as a tight fit.</span></div></div></section>`;}
 function geoBanner(){const g=state.geo;if(!g)return '';
  const bits=[];
  if(g.off)bits.push(`<span class="chip bad">${esc(g.off)}</span>`);
@@ -925,7 +953,7 @@ function renderRoutes(){
  const dl=`<datalist id="plates">${state.fleet.vehicles.map(v=>`<option value="${esc(v.plate)}">${esc(v.type)}</option>`).join('')}</datalist>`;
  return dl+`<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('Vehicles',state.vp?state.vp.veh.length:'-',state.vp&&state.vp.veh.some(v=>v.trips.length>1)?'some do 2 trips':'one trip each')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
  ${all?'<div class="done-msg">All routes approved. Type the plate and driver on each route, then press Save today&#39;s plan to keep it for 30 days.</div>':''}
- ${geoBanner()}${vehicleCard()}
+ ${geoBanner()}${rulesCard()}${vehicleCard()}${shortBox()}${deferBox()}
  ${rts.map(r=>routeCard(r,rts)).join('')}`;}
 
 /* ---------- side rail, top bar, tabs, notes ---------- */
@@ -1047,7 +1075,7 @@ document.addEventListener('change',ev=>{const t=ev.target;if(t&&t.dataset&&t.dat
 document.addEventListener('change',ev=>{const t=ev.target;
  if(t&&t.id==='pstyle'){state.pstyle=t.value;const ok=!Object.keys(state.approved).some(k=>state.approved[k])||confirm('Re-planning will undo the routes you approved and any stops you moved. Continue?');
   if(!ok){render();return}
-  state.routes=planDay(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};render();}});
+  state.deferred=[];state.routes=planDay(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};render();}});
 function wireFleet(){
  const ff=document.getElementById('ff'),pf=document.getElementById('pf');if(!ff)return;
  ff.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -1099,10 +1127,22 @@ document.addEventListener('click',ev=>{
  else if(a==='syncseed'){const n=seedBuiltIn();toast(n?`Added ${n} GroupeSeb addresses${SYNC.status==='ok'?' to the shared list':''}.`:'The built-in addresses are already in the list.');render()}
  else if(a==='syncoff'){SYNC.code='';SYNC.status='off';SYNC.msg='';syncKeep();render()}
  else if(a==='printroute'){printRoute(t.dataset.id)}
+ else if(a==='replan')replanToday()
+ else if(a==='replanall')replanAll()
+ else if(a==='mergeinto'){const from=state.routes.find(r=>r.id===t.dataset.from),to=state.routes.find(r=>r.id===t.dataset.to);if(!from||!to)return;
+  to.ids=to.ids.concat(from.ids);sequence(to);state.routes=state.routes.filter(r=>r!==from);delete state.approved[from.id];delete state.approved[to.id];delete state.assign[from.id];if(state.links)delete state.links[from.id];
+  toast('Route '+from.n+' added to Route '+to.n+'. Route '+to.n+' needs approving again.');render()}
+ else if(a==='defer'){const rt=state.routes.find(r=>r.id===t.dataset.id);if(!rt)return;
+  if((state.links||{})[rt.id]&&!confirm('Route '+rt.n+' was already sent to a driver. Moving it to next day removes it from the plan. Continue?'))return;
+  rt.ids.forEach(id=>state.deferred.push({id,from:rt.n}));state.routes=state.routes.filter(r=>r!==rt);delete state.approved[rt.id];delete state.assign[rt.id];if(state.links)delete state.links[rt.id];
+  toast('Route '+rt.n+' moved to next day. It is listed below and saved with today\'s plan.');render()}
+ else if(a==='undefer'){state.deferred=state.deferred.filter(d=>d.id!==t.dataset.id);replanToday()}
+ else if(a==='copydef')copyDeferred()
+
  else if(a==='approve'){state.approved[t.dataset.id]=true;render()}
  else if(a==='undo'){delete state.approved[t.dataset.id];render()}
  else if(a==='approveall'){let n=0;state.routes.forEach(r=>{if(!state.approved[r.id]&&!analyse(r).why.length){state.approved[r.id]=true;n++}});const left=state.routes.filter(r=>!state.approved[r.id]).length;toast(n?plural(n,'route')+' approved.'+(left?' '+left+' still need attention.':''):'No route is ready yet. Confirm the flagged items first.');render()}
- else if(a==='reset'){state.routes=clone(INITIAL);state.approved={};state.next=INITIAL.length+1;toast('Routes reset.');render()}
+ else if(a==='reset'){state.deferred=[];state.routes=clone(INITIAL);state.approved={};state.next=INITIAL.length+1;toast('Routes reset.');render()}
 });
 document.addEventListener('change',ev=>{
  const t=ev.target.closest('select[data-act=move]');if(!t)return;const rts=state.routes;
@@ -1118,16 +1158,123 @@ render();
 if(SYNC.code)syncPull().then(()=>render());
 
 
+/* ---------- morning re-plan, shortfalls, next-day list ---------- */
+const routeNum=r=>+String(r.id).slice(1)||0;
+function replanToday(){
+ const isShort=r=>!!(r._v&&r._v.short);
+ const locked=state.routes.filter(r=>state.approved[r.id]&&!isShort(r)&&r.ids.length);
+ const lockedSet=new Set(locked);
+ const dropped=state.routes.filter(r=>!lockedSet.has(r));
+ const sent=dropped.filter(r=>(state.links||{})[r.id]);
+ if(sent.length&&!confirm('Route '+sent.map(r=>r.n).join(', ')+(sent.length>1?' were':' was')+' already sent to a driver. Regrouping replaces '+(sent.length>1?'them':'it')+', so the new route must be sent again. Continue?'))return;
+ const lockedIds=new Set(locked.flatMap(r=>r.ids));
+ const defIds=new Set(state.deferred.map(d=>d.id));
+ const pool=Object.values(S).filter(s=>!lockedIds.has(s.id)&&!defIds.has(s.id));
+ state.next=Math.max(state.next||1,...state.routes.map(r=>routeNum(r)+1));
+ dropped.forEach(r=>{delete state.assign[r.id];delete state.approved[r.id];if(state.links)delete state.links[r.id];if(state.tokens)delete state.tokens[r.id]});
+ const before=state.routes.length;
+ state.routes=planDay(pool,locked);
+ state.next=Math.max(...state.routes.map(r=>routeNum(r)+1),state.next);
+ INITIAL=clone(state.routes);
+ const nowShort=(state.vp=vehiclePlan(),state.vp.veh.filter(v=>!v.unplaced&&v.short).length);
+ toast('Re-planned. '+plural(locked.length,'approved route')+' kept as they were, '+plural(state.routes.length-locked.length,'route')+' regrouped'+(nowShort?'. Some routes still have no vehicle: see the box below.':'.'));
+ render();}
+function shortRoutes(){
+ const vp=state.vp;if(!vp)return [];
+ const out=[];
+ for(const v of vp.veh.filter(v=>!v.unplaced&&v.short))for(const t of v.trips){const rt=state.routes.find(r=>r.id===t.rid);if(rt&&rt.ids.length)out.push(rt)}
+ return out;}
+function trialShort(routes){
+ const keep=state.routes;state.routes=routes;let n=0;
+ try{n=vehiclePlan().veh.filter(v=>!v.unplaced&&v.short).length}finally{state.routes=keep;vehiclePlan()}
+ return n;}
+function shortOptions(rt){
+ const vp=state.vp;const seq=rt.ids.map(i=>S[i]);const cbm=seq.reduce((a,s)=>a+s.cbm,0);const height=seq.some(s=>s.maxH);
+ const res={rt,cbm,merges:[],blocked:0,second:null,noloc:seq.some(s=>s.noloc)};
+ if(res.noloc)return res;
+ const nowShort=vp.veh.filter(v=>!v.unplaced&&v.short).length;
+ for(const r2 of state.routes){
+  if(r2===rt||!r2.ids.length||!r2._v||r2._v.unplaced||r2._v.short||routeIsBig(r2))continue;
+  const s2=r2.ids.map(i=>S[i]);if(s2.some(s=>s.noloc))continue;
+  const merged=bestSeq(s2.concat(seq));const cbm2=merged.reduce((a,s)=>a+s.cbm,0);
+  if(cbm2>fleetCap(merged.some(s=>s.maxH))+1e-9)continue;
+  const e=evalRoute(merged);if(e.late>0||e.end>DELIV_END)continue;
+  const trial=state.routes.filter(r=>r!==rt).map(r=>r===r2?Object.assign({},r2,{ids:merged.map(s=>s.id)}):r);
+  if(trialShort(trial)>=nowShort){res.blocked++;continue}
+  const base=evalRoute(s2);
+  res.merges.push({to:r2,cbm:cbm2,end:e.end,add:e.dur-base.dur,approved:!!state.approved[r2.id]});}
+ res.merges.sort((a,b)=>a.add-b.add);res.merges=res.merges.slice(0,2);
+ let best=null;
+ for(const v of vp.veh.filter(v=>!v.unplaced&&!v.short&&v.trips.length)){
+  let md=v.free,ld=v.lunch;if(!ld&&md>=LUNCH_AT){md+=LUNCH_MIN;ld=true}
+  const r=evalRouteAt(seq,md,ld);const over=Math.max(0,r.end-DELIV_END);const late=Math.max(0,...r.legs.filter(l=>!l.stop.noloc).map(l=>l.late||0));
+  const back=v.trips[v.trips.length-1].back;
+  const sc=late*1000+over;
+  if(!best||sc<best.sc)best={sc,v,r,over,late,back};}
+ res.second=best;res.height=height;
+ return res;}
+function shortBox(){
+ const list=shortRoutes();if(!list.length)return '';
+ const blocks=list.map(rt=>{const o=shortOptions(rt);
+  const need=vehicleNeed(o.cbm,o.height)||'a vehicle';
+  let opt1,opt2;
+  if(o.noloc){opt1='<span class="sub">Its location is not on file, so it cannot be merged automatically.</span>';opt2=''}
+  else{
+   opt1=o.merges.length?o.merges.map(m=>`<div class="why" style="margin:4px 0"><span>Add it to <b>Route ${m.to.n}</b>: that vehicle would carry ${m3(m.cbm)} m³ and be back about ${fmt(m.end)}${m.approved?' (Route '+m.to.n+' needs approving again)':''}.</span><button class="btn sm" data-act="mergeinto" data-from="${rt.id}" data-to="${m.to.id}">Add to Route ${m.to.n}</button></div>`).join(''):(o.blocked?'<div class="sub">Adding it to another route would only move the shortage there, because that vehicle would then need a size that is also used up.</div>':'<div class="sub">No other route can take it without going over the biggest vehicle or past 17:00.</div>');
+   const s=o.second;
+   opt2=s?(s.late>0||s.over>0?`<div class="sub">Earliest vehicle back is Vehicle ${s.v.n} at about ${fmt(s.back)}. A second trip would ${s.late>0?'reach one stop '+Math.round(s.late)+' min after its window':'finish about '+fmt(s.r.end)+', after 17:00'}, so the planner did not use it. If you accept that, move the stops by hand (Move to).`:`<div class="sub">Vehicle ${s.v.n} is back about ${fmt(s.back)} and the timing would work, but it is a ${esc(s.v.vt||'smaller vehicle')} and the load needs ${esc(need)}.`)+'</div>':'<div class="sub">No vehicle is running yet to do a second trip.</div>';}
+  return `<div class="why" style="display:block;border-top:1px solid var(--line);padding-top:10px;margin-top:10px"><div><b>Route ${rt.n}</b> <span class="sub">${esc(rt.label)} · ${plural(rt.ids.length,'stop')} · ${m3(o.cbm)} m³ · needs ${esc(need)}</span></div>
+   <div style="margin-top:6px"><b>1. Ask another vehicle to take more</b>${opt1}</div>
+   <div style="margin-top:6px"><b>2. Second trip by whoever is back first</b>${opt2}</div>
+   <div style="margin-top:6px"><b>3. Deliver on another day</b><div class="why" style="margin:4px 0"><span>Take these stops out of today and list them for the customer.</span><button class="btn ghost sm" data-act="defer" data-id="${rt.id}">Move Route ${rt.n} to next day</button></div></div></div>`}).join('');
+ return `<section class="card"><div class="ch">Not enough vehicles for ${plural(list.length,'route')}<small>choose what to do with each</small></div><div class="rf" style="display:block">${blocks}</div></section>`;}
+function deferBox(){
+ if(!state.deferred.length)return '';
+ const rows=state.deferred.map(d=>{const s=S[d.id];if(!s)return '';const docs=(ORDERS[s.id]||[]).map(o=>String(o.doc));
+  return `<tr><td class="nm">${esc(s.name)}<div class="sub">${esc(s.cust||'')}</div></td><td>${esc(docs.join(', '))}</td><td class="num">${m3(s.cbm)}</td><td class="nw"><button class="btn ghost sm" data-act="undefer" data-id="${s.id}">Bring back to today</button></td></tr>`}).join('');
+ const tot=state.deferred.reduce((a,d)=>a+(S[d.id]?S[d.id].cbm:0),0);
+ return `<section class="card"><div class="ch">Moved to next day<small>${plural(state.deferred.length,'stop')} · ${m3(tot)} m³</small></div><div class="scroll"><table><thead><tr><th>Ship-to</th><th>Order numbers</th><th class="num">m³</th><th></th></tr></thead><tbody>${rows}</tbody></table></div><div class="rf"><div class="why"><span class="sub">Ask the customer to confirm the new date. These stops are saved with today's plan.</span></div><div class="fa"><button class="btn sm" data-act="copydef">Copy list</button></div></div></section>`;}
+function copyDeferred(){
+ const lines=state.deferred.map(d=>{const s=S[d.id];if(!s)return '';return [s.cust||'',s.name,addrText(s),(ORDERS[s.id]||[]).map(o=>o.doc).join(' / '),m3(s.cbm)+' m3'].join(' | ')}).filter(Boolean).join('\n');
+ const done=()=>toast('List copied. Paste it into your message to the customer.');
+ try{navigator.clipboard.writeText(lines).then(done,()=>toast('Could not copy. Select the table and copy it instead.'))}catch(e){toast('Could not copy. Select the table and copy it instead.')}}
+
+/* ---------- planning rules card (big orders, zones) ---------- */
+const ULBL={'14 footer':'14 footer (subcontract)','Hub drivers':'Hub drivers (24 ft or 14 ft)'};
+function rulesCard(){
+ const stops=Object.values(S);if(!stops.length)return '';
+ const zs=['N','S','E','W'];
+ const rows=stops.filter(s=>!s.noloc).sort((a,b)=>(postalOf(a)||'999999').localeCompare(postalOf(b)||'999999')||String(a.name).localeCompare(String(b.name))).map(s=>`<tr><td class="nm">${esc(s.name)}${isBig(s)?' <span class="chip warn">big</span>':''}<div class="sub">${esc(s.area||'')}</div></td><td class="mono">${esc(postalOf(s))}</td><td class="num">${m3(s.cbm)}</td><td class="nw"><select data-zone="${esc(s.id)}" aria-label="Zone for ${esc(s.name)}">${zs.map(z=>`<option value="${z}"${s.zone===z?' selected':''}>${ZNAME[z]}</option>`).join('')}</select>${ZOV[zkey(s)]?' <span class="sub">set by you</span>':''}</td></tr>`).join('');
+ const nb=stops.filter(isBig).length;
+ return `<section class="card"><div class="ch">Planning rules<small>1 big orders · 2 location · 3 customer timing (never broken)</small></div>
+ <div class="tb"><span class="sub">Big order: a ship-to named</span> <input type="text" id="rl_names" value="${esc(RULES.bigNames)}" style="min-width:200px" aria-label="Big order names, separated by commas"> <span class="sub">or above</span> <input type="text" inputmode="decimal" id="rl_cbm" value="${esc(RULES.bigCbm)}" style="width:48px" aria-label="Big order size in cubic metres"> <span class="sub">m³,</span> <label class="sub"><input type="checkbox" id="rl_rs"${RULES.roadshow?' checked':''}> or anything marked roadshow</label></div>
+ <div class="tb"><label class="sub"><input type="checkbox" id="rl_zn"${RULES.zones?' checked':''}> Keep each route in one zone (North, South, East, West)</label> <button class="btn sm" data-act="replanall">Re-plan everything with these rules</button></div>
+ <div class="tb"><span class="sub">${plural(nb,'big order')} in this day. Each gets its own vehicle first, and that vehicle may take a nearby second trip. Changing a rule does not change the routes until you press Re-plan.</span></div>
+ <details id="zdet" style="padding:0 14px 12px"${state.zopen?' open':''}><summary class="sub" style="cursor:pointer">Where each stop landed (check the zones and correct any)</summary><div class="scroll"><table><thead><tr><th>Ship-to</th><th>Postal</th><th class="num">m³</th><th>Zone</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;}
+function replanAll(){
+ const hasAppr=Object.keys(state.approved).some(k=>state.approved[k]);
+ if(hasAppr&&!confirm('Re-planning replaces every route, including the ones you approved or sent to drivers. Continue?'))return;
+ state.deferred=[];state.assign={};state.routes=planDay(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};
+ toast('Re-planned with the current rules: '+plural(state.routes.length,'route')+'.');render();}
+document.addEventListener('toggle',ev=>{if(ev.target&&ev.target.id==='zdet')state.zopen=ev.target.open},true);
+document.addEventListener('change',ev=>{const t=ev.target;if(!t)return;
+ if(t.id==='rl_names'){RULES.bigNames=t.value;rulesSave();render()}
+ else if(t.id==='rl_cbm'){const v=parseFloat(String(t.value).replace(',','.'));RULES.bigCbm=isFinite(v)&&v>0?v:0;rulesSave();render()}
+ else if(t.id==='rl_rs'){RULES.roadshow=t.checked;rulesSave();render()}
+ else if(t.id==='rl_zn'){RULES.zones=t.checked;rulesSave();render()}
+ else if(t.dataset&&t.dataset.zone){const s=S[t.dataset.zone];if(!s)return;const auto=zoneAuto(s);if(t.value===auto)delete ZOV[zkey(s)];else ZOV[zkey(s)]=t.value;zovSave();s.zone=zoneOf(s);toast('Zone saved on this computer. Press Re-plan to apply it.');render()}});
+
 /* ---------- saved day plans ---------- */
 const hm=v=>v==null?'':fmt(v);
 function planPayload(){
  const vp=state.vp||vehiclePlan();
  const routes=state.routes.filter(r=>r.ids.length).map(rt=>{const a=analyse(rt);const as=state.assign[rt.id]||{};const v=rt._v;
   const veh=v?vp.veh.find(x=>x.n===v.n):null;const located=!a.seq.every(s=>s.noloc);
-  return {n:rt.n,label:rt.label,vehicleNo:v?v.n:null,trip:v&&!v.unplaced?v.i+' of '+v.of:'',type:veh&&veh.vt?veh.vt:'',plate:(as.veh||'').trim(),driver:(as.drv||'').trim(),approved:!!state.approved[rt.id],cbm:+a.cbm.toFixed(2),
+  return {n:rt.n,label:rt.label,zone:routeZones(rt),big:routeIsBig(rt),vehicleNo:v?v.n:null,trip:v&&!v.unplaced?v.i+' of '+v.of:'',type:veh&&veh.vt?veh.vt:'',plate:(as.veh||'').trim(),driver:(as.drv||'').trim(),approved:!!state.approved[rt.id],cbm:+a.cbm.toFixed(2),
    depart:located?Math.round(a.e.depart):null,back:located?Math.round(a.e.end):null,
    stops:a.e.legs.map(l=>({name:l.stop.name,cust:l.stop.cust||'',addr:addrText(l.stop),cbm:+l.stop.cbm.toFixed(2),eta:l.stop.noloc?null:Math.round(l.eta),orders:(ORDERS[l.stop.id]||[]).map(o=>String(o.doc))}))};});
- return {label:state.dateLabel||'',routes};}
+ const deferred=state.deferred.filter(d=>S[d.id]).map(d=>{const s=S[d.id];return {name:s.name,cust:s.cust||'',addr:addrText(s),cbm:+s.cbm.toFixed(2),orders:(ORDERS[s.id]||[]).map(o=>String(o.doc)),fromRoute:d.from}});
+ return {label:state.dateLabel||'',routes,deferred};}
 async function loadHist(){const r=await sapi('GET','?op=plans');state.hist={ok:r.ok,status:r.status,plans:(r.j&&r.j.plans)||[]};}
 async function savePlan(){
  if(!state.routes.length)return;
@@ -1143,13 +1290,13 @@ async function savePlan(){
  const r=await sapi('POST','?op=saveplan',{date,plan:p});
  state.hist=null;
  toast(r.ok?'Plan for '+niceDate(date)+' saved for 30 days (Plan history).':r.status===401?'The access code was not accepted.':r.status===404||r.status===405?'The shared list function on this site is not updated yet.':'Could not save the plan. Try again.');}
-function histMatch(p,q){if(!q)return true;return norm(JSON.stringify([p.date,p.savedBy,p.routes.map(r=>[r.plate,r.driver,r.type,r.stops.map(s=>[s.name,s.cust,s.orders])])])).includes(q)}
+function histMatch(p,q){if(!q)return true;return norm(JSON.stringify([p.date,p.savedBy,p.routes.map(r=>[r.plate,r.driver,r.type,r.stops.map(s=>[s.name,s.cust,s.orders])]),(p.deferred||[]).map(s=>[s.name,s.cust,s.orders])])).includes(q)}
 function histList(){
  const h=state.hist;const q=norm(state.hq||'');const ps=h.plans.filter(p=>histMatch(p,q));
  if(!ps.length)return `<section class="card empty"><b>${h.plans.length?'Nothing matches that search.':'No plans saved yet.'}</b><p>${h.plans.length?'':'Approve the routes, type plates and drivers, then press Save today\'s plan.'}</p></section>`;
  return ps.map(p=>{const tot=p.routes.reduce((a,r)=>a+r.cbm,0);const ap=p.routes.filter(r=>r.approved).length;
   const rows=p.routes.map(r=>`<tr><td class="mono">${r.n}</td><td>${r.vehicleNo?'Vehicle '+r.vehicleNo+(r.trip?' · trip '+esc(r.trip):''):'-'}<div class="sub">${esc(r.type)}</div></td><td class="mono nw">${r.plate?esc(r.plate):'<span class="chip warn">none</span>'}</td><td>${r.driver?esc(r.driver):'<span class="chip warn">none</span>'}</td><td class="mono nw">${r.depart!=null?fmt(r.depart)+'–'+fmt(r.back):''}</td><td>${r.stops.map(s=>`<div><b>${esc(s.name)}</b> <span class="sub">${esc(s.orders.join(', '))}</span></div>`).join('')}</td><td class="num">${m3(r.cbm)}</td></tr>`).join('');
-  return `<section class="card"><div class="ch">${esc(niceDate(p.date))}<small>${plural(p.routes.length,'route')} · ${m3(tot)} m³ · ${ap} approved · saved by ${esc(p.savedBy)} ${esc((p.savedAt||'').slice(0,16).replace('T',' '))} UTC</small></div><div class="scroll"><table><thead><tr><th>Route</th><th>Vehicle</th><th>Plate</th><th>Driver</th><th>Time</th><th>Stops and order numbers</th><th class="num">m³</th></tr></thead><tbody>${rows}</tbody></table></div><div class="rf"><div class="fa"><button class="btn ghost sm" data-act="hdel" data-d="${esc(p.date)}">Delete this day</button><button class="btn sm" data-act="hdl" data-d="${esc(p.date)}">Download Excel</button></div></div></section>`}).join('');}
+  return `<section class="card"><div class="ch">${esc(niceDate(p.date))}<small>${plural(p.routes.length,'route')} · ${m3(tot)} m³ · ${ap} approved · saved by ${esc(p.savedBy)} ${esc((p.savedAt||'').slice(0,16).replace('T',' '))} UTC</small></div><div class="scroll"><table><thead><tr><th>Route</th><th>Vehicle</th><th>Plate</th><th>Driver</th><th>Time</th><th>Stops and order numbers</th><th class="num">m³</th></tr></thead><tbody>${rows}</tbody></table></div>${(p.deferred&&p.deferred.length)?`<div class="rf"><div class="why"><span class="chip warn">Moved to next day: ${plural(p.deferred.length,'stop')}</span><span class="sub">${p.deferred.map(s=>esc(s.name)+(s.orders&&s.orders.length?' ('+esc(s.orders.join(', '))+')':'')).join('; ')}</span></div></div>`:''}<div class="rf"><div class="fa"><button class="btn ghost sm" data-act="hdel" data-d="${esc(p.date)}">Delete this day</button><button class="btn sm" data-act="hdl" data-d="${esc(p.date)}">Download Excel</button></div></div></section>`}).join('');}
 function renderHistory(){
  if(SYNC.status!=='ok')return `<section class="card empty"><b>Connect the shared list first.</b><p>Saved plans are kept in the shared store for 30 days. Open Ship-to list, type your name and the access code, and press Connect.</p></section>`;
  const h=state.hist;
@@ -1161,6 +1308,7 @@ function dlPlan(date){
  const p=state.hist&&state.hist.plans.find(x=>x.date===date);if(!p||typeof XLSX==='undefined')return;
  const rows=[['Delivery date','Route','Vehicle','Trip','Vehicle type','Plate','Driver','Stop no.','Ship-to','Customer','Address','Order number','Planned arrival','Stop m³']];
  for(const r of p.routes)r.stops.forEach((s,i)=>{const docs=s.orders.length?s.orders:[''];docs.forEach((d,k)=>rows.push([p.date,'Route '+r.n,r.vehicleNo?'Vehicle '+r.vehicleNo:'',r.trip,r.type,r.plate,r.driver,i+1,s.name,s.cust,s.addr,d,k?'':hm(s.eta),k?'':s.cbm]))});
+ for(const s of (p.deferred||[])){const docs=s.orders&&s.orders.length?s.orders:[''];docs.forEach((d,k)=>rows.push([p.date,'Moved to next day','','','','','','',s.name,s.cust,s.addr,d,'',k?'':s.cbm]))}
  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Plan '+p.date);XLSX.writeFile(wb,'Hub-route-plan-'+p.date+'.xlsx');}
 async function delPlan(date){
  if(!confirm('Delete the saved plan for '+niceDate(date)+'? This cannot be undone.'))return;
