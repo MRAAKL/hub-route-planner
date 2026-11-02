@@ -283,6 +283,7 @@ const LUNCH_AT=720,LUNCH_MIN=60;
 function run(seq,dep,ld){let t=dep,pos=WH,late=0,dist=0,out=[],lunch=!!ld,took=false,lunchLast=false;
  for(let i=0;i<seq.length;i++){const s=seq[i];const d=km(pos,s);dist+=d;t+=legMin(pos,s);const arr=t;let wait=0;
   if(s.win&&s.win[0]!=null&&t<s.win[0]){wait=s.win[0]-t;t=s.win[0];}
+  if(s.avoid&&t>s.avoid[0]&&t<s.avoid[1]){wait+=s.avoid[1]-t;t=s.avoid[1];}
   let l=0;if(s.win&&s.win[1]!=null&&t>s.win[1]){l=t-s.win[1];late+=l;}
   const e={stop:s,eta:t,arrive:arr,wait,late:l};out.push(e);t+=serviceMin(s);pos=s;
   if(!lunch&&t>=LUNCH_AT){lunch=true;if(i<seq.length-1){t+=LUNCH_MIN;took=true;e.lunchAfter=true}else lunchLast=true}}
@@ -338,7 +339,7 @@ const CONFLICT={
 const REVIEW=['noaddr','postal','conflict'];
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=t=>{t=Math.round(t);return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0')};
-const winText=s=>!s.win?'Any time':(s.win[0]==null?'Before '+fmt(s.win[1]):fmt(s.win[0])+'–'+fmt(s.win[1]));
+const winText=s=>(!s.win?'Any time':(s.win[0]==null?'Before '+fmt(s.win[1]):fmt(s.win[0])+'–'+fmt(s.win[1])))+(s.avoid?', not '+fmt(s.avoid[0])+'–'+fmt(s.avoid[1]):'');
 const m3=x=>x.toFixed(2);
 const clone=o=>JSON.parse(JSON.stringify(o));
 const plural=(n,w)=>n+' '+w+(n===1?'':'s');
@@ -346,10 +347,12 @@ const kb=n=>n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024)
 
 /* ---------- reading the Excel files ---------- */
 function t24(h,m,ap){h=+h;m=+(m||0);if(ap){ap=ap.toLowerCase();if(ap==='pm'&&h<12)h+=12;if(ap==='am'&&h===12)h=0;}return h*60+m;}
+const AVOID_RE=/(?:avoid(?:ing)?|except(?:\s+between)?|excluding|do\s*not\s+(?:deliver|send)(?:\s+(?:during|between))?|don'?t\s+(?:deliver|send)(?:\s+(?:during|between))?|no\s+deliver(?:y|ies)\s*(?:during|between)?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;
+function parseAvoid(txt){const t=String(txt||'').replace(/\s+/g,' ');AVOID_RE.lastIndex=0;const m=AVOID_RE.exec(t);if(!m)return null;let a=t24(m[1],m[2],m[3]||m[6]);const b=t24(m[4],m[5],m[6]);if(!m[3]&&a>=b)a=t24(m[1],m[2],'am');return b>a?[a,b]:null}
 function parseWin(txt){
- const t=String(txt||'').replace(/\s+/g,' ').replace(/sat(?:urday)?s?\s*(?:till|until|before|by)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/ig,'');
- const m=t.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
- if(m){const a=t24(m[1],m[2],m[3]||m[6]);let b=t24(m[4],m[5],m[6]);if(b<=a&&/am/i.test(m[6])&&+m[4]===12)b=720;if(b>a)return [a,b];}
+ const t=String(txt||'').replace(/\s+/g,' ').replace(AVOID_RE,' ').replace(/sat(?:urday)?s?\s*(?:till|until|before|by)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/ig,'');
+ const m=t.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)/i);
+ if(m){const a=t24(m[1],m[2],m[3]||m[6]);let b=t24(m[4],m[5],m[6]);if(b<=a&&/am/i.test(m[6])&&+m[4]===12)b=720;if(b<=a&&!m[3]){const a2=t24(m[1],m[2],'am');if(b>a2)return [a2,b]}if(b>a)return [a,b];}
  const ends=[];const re=/(?:before|by|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;let x;
  while((x=re.exec(t)))ends.push(t24(x[1],x[2],x[3]));
  if(ends.length)return [null,Math.min(...ends)];
@@ -415,12 +418,13 @@ function buildStops(files){
  for(const [k,os] of groups){
   const tpl=KNOWN[k];const dels=os.filter(o=>o.type==='Delivery');
   let win=null;for(const o of (dels.length?dels:os)){const w=parseWin(o.remarks);if(w){win=w;break}}
+  let avoid=null;for(const o of (dels.length?dels:os)){const w=parseAvoid(o.remarks);if(w){avoid=w;break}}
   const types=[...new Set(os.map(o=>o.type))];
   const maxH=os.map(o=>parseHeight(o.remarks)).find(x=>x)||(tpl&&tpl.maxH)||null;
   const cbm=os.reduce((a,o)=>a+o.cbm,0);
   const base=tpl?clone(tpl):{id:'U'+(++u),cust:'GroupeSeb',name:os[0].name,area:'Not on master list',lat:WH.lat,lng:WH.lng,noloc:true,addrSrc:'missing',addr:'Not on master list',flags:['noaddr','newship'],
-   raw:(dels[0]||os[0]).remarks,read:win?'Window read from the remarks: '+winText({win})+'.':'No time window found in the remarks.'};
-  const s=Object.assign(base,{code:os.map(o=>o.code).find(x=>x!=null&&x!=='')||undefined,n:os.length,cbm:Math.round(cbm*1000)/1000,types,win:win||(tpl?tpl.win:null),maxH:maxH||undefined});
+   raw:(dels[0]||os[0]).remarks,read:win||avoid?'Window read from the remarks: '+winText({win,avoid})+'.':'No time window found in the remarks.'};
+  const s=Object.assign(base,{code:os.map(o=>o.code).find(x=>x!=null&&x!=='')||undefined,n:os.length,cbm:Math.round(cbm*1000)/1000,types,win:win||(tpl?tpl.win:null),avoid:avoid||undefined,maxH:maxH||undefined});
   s.flags=s.flags.filter(f=>f!=='mixed'&&f!=='coll');
   const be=bookGet(s.cust,s.name,s.code);
   if(be&&be.addr&&s.addrSrc!=='order'){s.addr=be.addr;s.addrSrc='saved';s.flags=s.flags.filter(f=>f!=='newship');s.fromBook=true;}
