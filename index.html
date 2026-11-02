@@ -623,7 +623,7 @@ async function readFleetFile(f){
  }catch(e){return {error:'This file could not be read. Check that it is the filled-in Hub fleet master list (.xlsx).'}}}
 /* planning value of a type: lower or upper end of the practical range */
 const pv=t=>t.cbm?(state.plan==='hi'?t.cbm.hi:t.cbm.lo):null;
-const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).sort((a,b)=>pv(a)-pv(b)):[];
+const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).map(t=>t.name==='24 footer'?Object.assign({},t,{cbm:{lo:14,hi:18.5}}):t).sort((a,b)=>pv(a)-pv(b)):[];
 const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).map(t=>/40/.test(t.name)?Object.assign({},t,{cbm:{lo:Math.max(t.cbm.lo,35),hi:Math.max(t.cbm.hi,35)}}):t).sort((a,b)=>pv(a)-pv(b)):[];
 function fleetCap(height){const r=rigidTypes();const cap=r.length?pv(r[r.length-1]):12;return height?Math.min(cap,10):cap;}
 function vehicleNeed(cbm,height){
@@ -758,7 +758,6 @@ const lastOf=seq=>seq[seq.length-1];
 const morningLoad=cbm=>480+(cbm>10?MORN_BIG:MORN_SMALL);
 function assignTypes(veh){
  const left={};for(const k in state.units){const n=state.units[k];left[k]=(n===''||n==null)?Infinity:+n}
- if('Van' in left)left['Van']=Infinity;
  const pool='Hub drivers' in left;const hub=()=>pool?left['Hub drivers']:Infinity;
  const has=nm=>{if(!(nm in left))return true;if(pool&&/^24/.test(nm))return left[nm]>0&&hub()>0;if(pool&&/^14/.test(nm))return hub()>0||left[nm]>0;return left[nm]>0};
  const take=nm=>{if(!(nm in left))return '';if(pool&&/^24/.test(nm)){left[nm]--;left['Hub drivers']--;return 'hub'}if(pool&&/^14/.test(nm)){if(left[nm]>0){left[nm]--;return 'sub'}left['Hub drivers']--;return 'hub'}left[nm]--;return ''};
@@ -766,6 +765,7 @@ function assignTypes(veh){
   v.vt=null;v.tight=false;v.short=false;v.prime=false;v.src='';
   const rg=rigidTypes().filter(t=>pv(t)>=v.cbm-1e-9&&!(v.height&&v.cbm>10));
   let pick=rg.find(t=>has(t.name));
+  if(pick&&/^14/.test(pick.name)&&v.cbm<5&&pool&&hub()>0){const alt=rg.find(t=>/^24/.test(t.name)&&has(t.name));if(alt)pick=alt}
   if(!pick&&!v.height){if(has('Prime mover'))pick=trailerTypes().find(t=>pv(t)>=v.cbm-1e-9);if(pick){v.prime=true;take('Prime mover')}}
   if(pick){if(!v.prime)v.src=take(pick.name);v.vt=pick.name+(v.prime?' with a prime mover':'')+(v.src==='sub'?' (subcontractor)':'');v.tight=!!(pick.cbm&&pick.kind==='rigid'&&v.cbm>pick.cbm.lo+1e-9&&pick.cbm.lo!==pick.cbm.hi);}
   else{v.short=true;v.want=vehicleNeed(v.cbm,v.height);}
