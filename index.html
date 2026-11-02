@@ -476,9 +476,13 @@ let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
 const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
 const zovSave=()=>{try{localStorage.setItem(ZKEY,JSON.stringify(ZOV))}catch(e){}};
 const ZNAME={N:'North',S:'South',E:'East',W:'West'};
-/* a stop belongs to the nearest of four anchor points: Woodlands/Yishun, Orchard/CBD, Tampines/Paya Lebar, Jurong */
-const ZANCH={N:[1.425,103.83],S:[1.29,103.84],E:[1.335,103.93],W:[1.34,103.70]};
-function zoneAuto(s){if(s.noloc||s.lat==null||s.lng==null)return '';let b='',bd=1e9;for(const z in ZANCH){const dy=s.lat-ZANCH[z][0],dx=s.lng-ZANCH[z][1],d=dy*dy+dx*dx;if(d<bd){bd=d;b=z}}return b;}
+/* a stop belongs to the zone of the nearest anchor point (several per zone, so central areas land where planners put them) */
+const ZANCH={
+ N:[[1.437,103.786],[1.43,103.835],[1.449,103.82],[1.37,103.85],[1.351,103.848],[1.334,103.85],[1.355,103.875],[1.37,103.89],[1.405,103.9]],
+ S:[[1.304,103.832],[1.285,103.855],[1.265,103.82],[1.285,103.82],[1.293,103.832],[1.32,103.84]],
+ E:[[1.318,103.892],[1.302,103.905],[1.324,103.93],[1.353,103.945],[1.373,103.949],[1.343,103.953]],
+ W:[[1.333,103.742],[1.315,103.765],[1.349,103.75],[1.34,103.7],[1.32,103.65],[1.385,103.745],[1.34,103.775]]};
+function zoneAuto(s){if(s.noloc||s.lat==null||s.lng==null)return '';let b='',bd=1e9;for(const z in ZANCH)for(const a of ZANCH[z]){const dy=s.lat-a[0],dx=s.lng-a[1],d=dy*dy+dx*dx;if(d<bd){bd=d;b=z}}return b;}
 const zkey=s=>norm(s.cust||'')+'|'+norm(s.name||'');
 const zoneOf=s=>ZOV[zkey(s)]||zoneAuto(s);
 function refreshZones(){for(const s of Object.values(S))s.zone=zoneOf(s);}
@@ -506,7 +510,7 @@ function groupRoutes(stops,Pp,startN){
   for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
    const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
-   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0);
+   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0)-((!s.noloc&&rt.seq.some(x=>!x.noloc&&km(x,s)<0.2))?500:0);
    if(sc<bs){bs=sc;best={rt,seq}}}
   if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s],big});}
  routes.sort((a,b)=>evalRoute(a.seq).depart-evalRoute(b.seq).depart||evalRoute(a.seq).end-evalRoute(b.seq).end);
@@ -743,8 +747,22 @@ function vehiclePlan(){
 
 /* ---------- merge routes across zones when that saves a vehicle ---------- */
 function vcount(routes){const keep=state.routes;state.routes=routes;let n=0,sh=0;try{const v=vehiclePlan().veh.filter(v=>!v.unplaced);n=v.length;sh=v.filter(x=>x.short).length}finally{state.routes=keep}return {n,sh}}
+function splitPairs(routes){let n=0;const L=routes.map(r=>r.ids.map(i=>S[i]).filter(s=>!s.noloc));
+ for(let i=0;i<L.length;i++)for(let j=i+1;j<L.length;j++)for(const a of L[i])for(const b of L[j])if(km(a,b)<0.2)n++;return n}
+/* stops at the same place (same mall or building) go on one route when that is feasible */
+function colocRepair(cur){
+ for(let guard=0;guard<10;guard++){let moved=false;
+  outer:for(let i=0;i<cur.length;i++)for(const a of cur[i].ids.map(x=>S[x])){if(a.noloc||isBig(a))continue;
+   for(let j=0;j<cur.length;j++){if(j===i)continue;if(!cur[j].ids.map(x=>S[x]).some(b=>!b.noloc&&!isBig(b)&&km(a,b)<0.2))continue;
+    const dest=cur[j].ids.map(x=>S[x]).concat([a]);const cbm=dest.reduce((s,x)=>s+x.cbm,0);if(cbm>fleetCap(dest.some(s=>s.maxH))+1e-9)continue;
+    const seq=bestSeq(dest);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END)continue;
+    const rest=cur[i].ids.filter(x=>x!==a.id);const nc=cur.slice();nc[j]=Object.assign({},cur[j],{ids:seq.map(s=>s.id),label:routeLabel(seq)});
+    if(rest.length){const sr=bestSeq(rest.map(x=>S[x]));nc[i]=Object.assign({},cur[i],{ids:sr.map(s=>s.id),label:routeLabel(sr)})}else nc.splice(i,1);
+    cur=nc;moved=true;break outer}}
+  if(!moved)break}
+ return cur}
 function consolidate(routes,locked,startN){
- locked=locked||[];let cur=routes.slice();
+ locked=locked||[];let cur=colocRepair(routes.slice());
  if(RULES.mix&&cur.length>1){
   const dist=rs=>rs.reduce((a,r)=>{const sq=r.ids.map(i=>S[i]);return a+(sq.every(s=>s.noloc)?0:evalRoute(sq).dist)},0);
   for(let guard=0;guard<12;guard++){
@@ -776,7 +794,7 @@ function planDay(stops,locked){
   const short=placed.filter(v=>v.short).length,prime=placed.filter(v=>v.prime).length,tight=placed.filter(v=>v.tight).length;
   let dist=0,maxDur=0,late=0,mixed=0;
   for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
-  const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
+  const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+splitPairs(routes)*5e3+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
   if(!best||sc<best.sc)best={sc,routes:clone(routes)};}
  best.routes=consolidate(best.routes,locked,startN);state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
 
