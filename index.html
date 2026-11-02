@@ -278,11 +278,13 @@ function km(a,b){const R=6371,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lng-a.lng)*
  const x=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
 /* leaving or returning to the warehouse: 45 min (near) to 90 min (20 km or more); between customers: 2.7 min per km */
 function legMin(a,b){const d=km(a,b);return (a===WH||b===WH)?45+45*Math.min(1,d/20):d*2.7}
-function serviceMin(s){return 30+Math.min(30,3*s.cbm)}
+/* very small windowed drops (e.g. NTUC outlets under 1.5 m3): driver arrives early and is away fast */
+const quick=s=>s.cbm<=1.5&&s.win&&s.win[0]!=null&&s.win[1]!=null&&!s.night;
+function serviceMin(s){return quick(s)?15:30+Math.min(30,3*s.cbm)}
 const LUNCH_AT=720,LUNCH_MIN=60;
 function run(seq,dep,ld){let t=dep,pos=WH,late=0,dist=0,out=[],lunch=!!ld,took=false,lunchLast=false;
  for(let i=0;i<seq.length;i++){const s=seq[i];const d=km(pos,s);dist+=d;t+=legMin(pos,s);const arr=t;let wait=0;
-  if(s.win&&s.win[0]!=null&&t<s.win[0]){wait=s.win[0]-t;t=s.win[0];}
+  if(s.win&&s.win[0]!=null){const w0=s.win[0]-(quick(s)?30:0);if(t<w0){wait=w0-t;t=w0;}}
   if(s.avoid&&t>s.avoid[0]&&t<s.avoid[1]){wait+=s.avoid[1]-t;t=s.avoid[1];}
   let l=0;if(s.win&&s.win[1]!=null&&t>s.win[1]){l=t-s.win[1];late+=l;}
   const e={stop:s,eta:t,arrive:arr,wait,late:l};out.push(e);t+=serviceMin(s);pos=s;
@@ -366,7 +368,15 @@ function fmtDate(v){
  return '';}
 const niceDate=d=>{if(!d)return '';const [y,m,dd]=d.split('-');return +dd+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]+' '+y};
 function normCode(v){if(v==null||v==='')return null;const s=String(v).trim();const m=s.match(/\b66\d{6}\b/);return m?m[0]:s}
-function fixDates(orders){
+function fixDates(orders){fixDates2(orders);fixDates1(orders)}
+function fixDates2(orders){
+ const T=iso=>{const [y,m,d]=iso.split('-').map(Number);return Date.UTC(y,m-1,d)/864e5};
+ const all=[...new Set(orders.map(o=>o.date).filter(Boolean))];
+ const sure=all.filter(x=>+x.split('-')[2]>12).map(T).sort((a,b)=>a-b);if(!sure.length)return;
+ const ref=sure[Math.floor(sure.length/2)];const map={};
+ for(const x of all){const [y,m,d]=x.split('-');if(+d>12||m===d)continue;const sw=y+'-'+d+'-'+m;if(Math.abs(T(x)-ref)>35&&Math.abs(T(sw)-ref)<=35)map[x]=sw}
+ if(Object.keys(map).length)orders.forEach(o=>{if(map[o.date])o.date=map[o.date]})}
+function fixDates1(orders){
  const c={};orders.forEach(o=>{if(o.date)c[o.date]=(c[o.date]||0)+1});
  const ds=Object.keys(c);if(ds.length<2)return;
  const top=ds.sort((a,b)=>c[b]-c[a])[0];const [y,m,d]=top.split('-');
@@ -438,10 +448,13 @@ function buildStops(files){
     if(remOk)cands.push({postal:'',text:rem});
     s.hint={cands};}
    if(!(be&&be.addr)&&s.addrSrc==='missing'&&(fileAddr||remOk)){const t=fileAddr||rem;s.addr=t.replace(/\s+/g,' ').replace(/^deliver to\s*/i,'').slice(0,150);s.addrSrc='order';s.raw=t;}}
+  {const nm=os.map(o=>String(o.remarks||'').match(/time\s*[:\-]?\s*(\d{1,2})[:.]?(\d{2})?\s*pm\b/i)).find(Boolean);if(!s.win&&nm&&+nm[1]>=8&&+nm[1]<12){s.night=true;s.win=[(+nm[1]+12)*60+(+nm[2]||0),null];s.flags.push('night');}}
+  if(os.some(o=>o.qty>0&&!(o.cbm>0)))s.flags.push('nocbm');
+  if(!s.win&&!s.night&&os.some(o=>/\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)\b/i.test(o.remarks||'')))s.flags.push('timeq');
   if(types.length>1)s.flags.push('mixed');else if(types[0]==='Collection')s.flags.push('coll');
   if(maxH&&!s.flags.includes('height'))s.flags.push('height');
   stops.push(s);orders[s.id]=os;}
- return {stops,orders};}
+ return splitOversize(stops,orders);}
 
 /* ---------- placing stops on the map (postal code or address -> position, done by the shared-list function) ---------- */
 const prettyArea=(s,hit)=>{const m=String(s.name).match(/\(([^)]+)\)\s*$/);if(m)return m[1].replace(/^(Finest\/|Cheers\/)/i,'').trim();
@@ -483,7 +496,7 @@ const ZANCH={
  E:[[1.318,103.892],[1.302,103.905],[1.324,103.93],[1.353,103.945],[1.373,103.949],[1.343,103.953]],
  W:[[1.333,103.742],[1.315,103.765],[1.349,103.75],[1.34,103.7],[1.32,103.65],[1.385,103.745],[1.34,103.775]]};
 function zoneAuto(s){if(s.noloc||s.lat==null||s.lng==null)return '';let b='',bd=1e9;for(const z in ZANCH)for(const a of ZANCH[z]){const dy=s.lat-a[0],dx=s.lng-a[1],d=dy*dy+dx*dx;if(d<bd){bd=d;b=z}}return b;}
-const zkey=s=>norm(s.cust||'')+'|'+norm(s.name||'');
+const zkey=s=>norm(s.cust||'')+'|'+norm((s.name||'').replace(/ \(load \d+ of \d+\)$/,''));
 const zoneOf=s=>ZOV[zkey(s)]||zoneAuto(s);
 function refreshZones(){for(const s of Object.values(S))s.zone=zoneOf(s);}
 const bigNamesList=()=>String(RULES.bigNames||'').split(',').map(x=>norm(x)).filter(Boolean);
@@ -501,7 +514,7 @@ const _bestSeq0=bestSeq;
 bestSeq=function(stops){const b=_bestSeq0(stops);if(!RULES.prioFirst||b.length<2)return b;
  const pr=b.filter(s=>isPrio(s));if(!pr.length||pr.every((s,i)=>b[i]===s))return b;
  const c=pr.concat(b.filter(s=>!isPrio(s)));const eb=evalRoute(b),ec=evalRoute(c);
- if(ec.late>eb.late+1e-9||(ec.end>DELIV_END&&eb.end<=DELIV_END)||ec.dist>eb.dist+(+RULES.prioKm||15))return b;return c;};
+ if(ec.late>eb.late+1e-9||(ec.end>dEndOf(ec)&&eb.end<=dEndOf(eb))||ec.dist>eb.dist+(+RULES.prioKm||15))return b;return c;};
 const maxHop=seq=>{let m=0;for(let i=1;i<seq.length;i++){if(seq[i].noloc||seq[i-1].noloc)continue;m=Math.max(m,km(seq[i-1],seq[i]))}return m};
 
 /* ---------- learning from planners' moves (kept in this browser) ---------- */
@@ -511,12 +524,31 @@ const lessSave=()=>{try{localStorage.setItem(LKEY,JSON.stringify(LESS))}catch(e)
 const lkey=(a,b)=>{const x=zkey(a),y=zkey(b);return x<y?x+'||'+y:y+'||'+x};
 (function(){const cut=Date.now()-LDAYS*864e5;let ch=false;for(const k in LESS)if(!(LESS[k].last>cut)){delete LESS[k];ch=true}if(ch)lessSave()})();
 const learned=(a,b)=>a!==b&&zkey(a)!==zkey(b)&&!!LESS[lkey(a,b)];
-const tied=(a,b)=>km(a,b)<0.2||learned(a,b);
+const tied=(a,b)=>!(a.split&&b.split&&a.split.of===b.split.of)&&(km(a,b)<0.2||learned(a,b));
 function learnMove(id,fromIds,toIds){LRN_MSG='';const s=S[id];if(!s||s.noloc||!toIds.length)return;
  fromIds.forEach(f=>{const o=S[f];if(o&&LESS[lkey(s,o)])delete LESS[lkey(s,o)]});
  const now=Date.now();let n=0;
  toIds.slice(0,8).forEach(t=>{const o=S[t];if(!o||o.noloc||zkey(o)===zkey(s))return;const k=lkey(s,o);const e=LESS[k]||{n:0,at:now};e.n++;e.last=now;e.a=s.name;e.b=o.name;LESS[k]=e;n++});
  lessSave();if(n)LRN_MSG='Saved for next time: '+s.name.slice(0,30)+' is kept with '+plural(n,'stop')+' of this route. You can remove it on the Planning rules card.'}
+let PLAN_LABEL='';
+
+/* a delivery bigger than the biggest vehicle is split into equal loads, each planned as its own trip */
+const SPLITCAP=14;
+function splitOversize(stops,orders){const out=[];const ords=Object.assign({},orders);
+ const pm=state.units['Prime mover'];const hasPm=(pm===''||pm==null||+pm>0);const T=35;
+ const P=(typeof fleetCap==='function'&&fleetCap(false))||14;
+ for(const s of stops){
+  let sizes=null;
+  if(hasPm){if(s.cbm>T){sizes=[];let rem=s.cbm;while(rem>T){sizes.push(P);rem-=P}sizes.unshift(rem)}}
+  else if(s.cbm>SPLITCAP){const n=Math.ceil(s.cbm/SPLITCAP);sizes=Array(n).fill(s.cbm/n)}
+  if(!sizes){out.push(s);continue}
+  delete ords[s.id];const n=sizes.length;let used=0;
+  for(let k=1;k<=n;k++){const p=clone(s);const c=k===n?Math.round((s.cbm-used)*1000)/1000:Math.round(sizes[k-1]*1000)/1000;used+=c;
+   p.id=s.id+'#'+k;p.name=s.name+' (load '+k+' of '+n+')';p.cbm=c;p.split={of:s.id,k,n,total:+s.cbm.toFixed(1)};p.flags=(s.flags||[]).concat(['split']);out.push(p);ords[p.id]=orders[s.id]}}
+ return {stops:out,orders:ords};}
+
+/* night deliveries (e.g. roadshow set-up at 10:30pm) are planned on their own and may run past 17:00 */
+function dEndOf(r){const g=r&&r.legs;if(!g||!g.length)return DELIV_END;const k=g.filter(l=>l.stop.night).length;return k===0?DELIV_END:(k===g.length?30*60:-1)}
 
 /* ---------- grouping into routes ---------- */
 function groupRoutes(stops,Pp,startN){
@@ -524,7 +556,7 @@ function groupRoutes(stops,Pp,startN){
  for(const s of stops.slice().sort((a,b)=>(isPrio(b)-isPrio(a))||b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
   for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
-   const seq=bestSeq(trial);const r=evalRoute(seq);if((P.hop&&maxHop(seq)>P.hop&&maxHop(seq)>maxHop(rt.seq)+1e-9)||r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
+   const seq=bestSeq(trial);const r=evalRoute(seq);if((P.hop&&maxHop(seq)>P.hop&&maxHop(seq)>maxHop(rt.seq)+1e-9)||r.late>0||r.dur>P.maxDur||(r.end>dEndOf(r)&&evalRoute(rt.seq).end<=DELIV_END))continue;
    const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0)-((!s.noloc&&rt.seq.some(x=>!x.noloc&&tied(x,s)))?500:0);
    if(sc<bs){bs=sc;best={rt,seq}}}
   if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s],big});}
@@ -592,7 +624,7 @@ async function readFleetFile(f){
 /* planning value of a type: lower or upper end of the practical range */
 const pv=t=>t.cbm?(state.plan==='hi'?t.cbm.hi:t.cbm.lo):null;
 const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).sort((a,b)=>pv(a)-pv(b)):[];
-const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).sort((a,b)=>pv(a)-pv(b)):[];
+const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).map(t=>/40/.test(t.name)?Object.assign({},t,{cbm:{lo:Math.max(t.cbm.lo,35),hi:Math.max(t.cbm.hi,35)}}):t).sort((a,b)=>pv(a)-pv(b)):[];
 function fleetCap(height){const r=rigidTypes();const cap=r.length?pv(r[r.length-1]):12;return height?Math.min(cap,10):cap;}
 function vehicleNeed(cbm,height){
  const r=rigidTypes();
@@ -726,6 +758,7 @@ const lastOf=seq=>seq[seq.length-1];
 const morningLoad=cbm=>480+(cbm>10?MORN_BIG:MORN_SMALL);
 function assignTypes(veh){
  const left={};for(const k in state.units){const n=state.units[k];left[k]=(n===''||n==null)?Infinity:+n}
+ if('Van' in left)left['Van']=Infinity;
  const pool='Hub drivers' in left;const hub=()=>pool?left['Hub drivers']:Infinity;
  const has=nm=>{if(!(nm in left))return true;if(pool&&/^24/.test(nm))return left[nm]>0&&hub()>0;if(pool&&/^14/.test(nm))return hub()>0||left[nm]>0;return left[nm]>0};
  const take=nm=>{if(!(nm in left))return '';if(pool&&/^24/.test(nm)){left[nm]--;left['Hub drivers']--;return 'hub'}if(pool&&/^14/.test(nm)){if(left[nm]>0){left[nm]--;return 'sub'}left['Hub drivers']--;return 'hub'}left[nm]--;return ''};
@@ -747,8 +780,9 @@ function vehiclePlan(){
  for(const x of info.filter(x=>x.located).sort((a,b)=>a.e.depart-b.e.depart||a.e.end-b.e.end)){
   let best=null;
   for(const v of veh){let ld=v.lunch,md=v.free;if(!ld&&md>=LUNCH_AT){md+=LUNCH_MIN;ld=true}
+   if(v.cbm>8||x.cbm>8)continue;
    const r=evalRouteAt(x.seq,md,ld);if(r.late>1e-9)continue;
-   if(r.end>DELIV_END||r.end+legMin(lastOf(x.seq),WH)>SHIFT_END)continue;
+   if(r.end>dEndOf(r)||r.end+legMin(lastOf(x.seq),WH)>SHIFT_END&&dEndOf(r)===DELIV_END)continue;
    const sc=(r.depart-v.free)+(x.cbm>v.cbm?400:0);
    if(!best||sc<best.sc)best={v,r,sc,ld}}
   if(best)mk(x,best.r,best.v,best.ld);
@@ -770,7 +804,7 @@ function colocRepair(cur){
   outer:for(let i=0;i<cur.length;i++)for(const a of cur[i].ids.map(x=>S[x])){if(a.noloc||isBig(a))continue;
    for(let j=0;j<cur.length;j++){if(j===i)continue;if(!cur[j].ids.map(x=>S[x]).some(b=>!b.noloc&&!isBig(b)&&tied(a,b)))continue;
     const dest=cur[j].ids.map(x=>S[x]).concat([a]);const cbm=dest.reduce((s,x)=>s+x.cbm,0);if(cbm>fleetCap(dest.some(s=>s.maxH))+1e-9)continue;
-    const seq=bestSeq(dest);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END)continue;
+    const seq=bestSeq(dest);const e=evalRoute(seq);if(e.late>0||e.end>dEndOf(e))continue;
     const rest=cur[i].ids.filter(x=>x!==a.id);const nc=cur.slice();nc[j]=Object.assign({},cur[j],{ids:seq.map(s=>s.id),label:routeLabel(seq)});
     if(rest.length){const sr=bestSeq(rest.map(x=>S[x]));nc[i]=Object.assign({},cur[i],{ids:sr.map(s=>s.id),label:routeLabel(sr)})}else nc.splice(i,1);
     cur=nc;moved=true;break outer}}
@@ -786,7 +820,7 @@ function consolidate(routes,locked,startN){
     const A=cur[i],B=cur[j];const all=A.ids.concat(B.ids).map(x=>S[x]);
     if(all.some(s=>s.noloc||isBig(s)))continue;
     const cbm=all.reduce((a,s)=>a+s.cbm,0);if(cbm>fleetCap(all.some(s=>s.maxH))+1e-9)continue;
-    const seq=bestSeq(all);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END||e.dur>(window.MAXDAY||420)||maxHop(seq)>(A.ids.length<=1&&A.ids.reduce((a,x)=>a+S[x].cbm,0)<1||B.ids.length<=1&&B.ids.reduce((a,x)=>a+S[x].cbm,0)<1?16:10))continue;
+    const seq=bestSeq(all);const e=evalRoute(seq);if(e.late>0||e.end>dEndOf(e)||e.dur>(window.MAXDAY||420)||maxHop(seq)>(A.ids.length<=1&&A.ids.reduce((a,x)=>a+S[x].cbm,0)<1||B.ids.length<=1&&B.ids.reduce((a,x)=>a+S[x].cbm,0)<1?16:10))continue;
     const trial=cur.filter((_,k)=>k!==i&&k!==j).concat([{id:A.id,n:A.n,label:routeLabel(seq),ids:seq.map(s=>s.id)}]);
     const v=vcount(locked.concat(trial));const tiny=A.ids.length<=1&&A.ids.reduce((a,x)=>a+S[x].cbm,0)<1||B.ids.length<=1&&B.ids.reduce((a,x)=>a+S[x].cbm,0)<1;
     if(v.sh>base.sh||v.n>base.n||(v.n===base.n&&!tiny))continue;
@@ -809,7 +843,7 @@ function* planDayGen(stops,locked){
   const placed=vp.veh.filter(v=>!v.unplaced);
   const short=placed.filter(v=>v.short).length,prime=placed.filter(v=>v.prime).length,tight=placed.filter(v=>v.tight).length;
   let dist=0,maxDur=0,late=0,mixed=0,hopPen=0;
-  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;hopPen+=Math.max(0,maxHop(seq)-10)*400;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
+  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;hopPen+=Math.max(0,maxHop(seq)-10)*400;maxDur=Math.max(maxDur,e.dur);if(e.end>dEndOf(e))late++;}
   const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+hopPen+routes.filter(r=>r.ids.length===1&&!isBig(S[r.ids[0]])&&!S[r.ids[0]].noloc&&S[r.ids[0]].cbm<1).length*3e3+splitPairs(routes)*5e3+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
   if(!best||sc<best.sc)best={sc,routes:clone(routes)};yield {k:++K,n:cands.length};}
  best.routes=consolidate(best.routes,locked,startN);state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
@@ -818,8 +852,8 @@ function planOverlay(on,txt,frac,sub){let o=document.getElementById('planov');if
  if(!o){o=document.createElement('div');o.id='planov';o.setAttribute('role','status');o.setAttribute('aria-live','polite');o.style.cssText='position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center';
   o.innerHTML='<div style="background:var(--card,#fff);color:var(--ink,#111);border:1px solid var(--line,#ddd);border-radius:12px;padding:20px 24px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.3)"><div id="planov-t" style="font-weight:600;margin-bottom:10px"></div><div style="height:8px;border-radius:4px;background:var(--line,#ddd);overflow:hidden"><div id="planov-b" style="height:100%;width:0;background:var(--ink,#111);transition:width .15s"></div></div><div id="planov-s" style="font-size:13px;margin-top:8px;color:var(--muted2,#666)"></div></div>';document.body.appendChild(o)}
  document.getElementById('planov-t').textContent=txt;document.getElementById('planov-b').style.width=Math.round(frac*100)+'%';document.getElementById('planov-s').textContent=sub||''}
-async function planDayAsync(stops,locked){planOverlay(true,'Planning routes',0,'Starting');await new Promise(r=>setTimeout(r,30));
- try{const g=planDayGen(stops,locked);for(;;){const r=g.next();if(r.done)return r.value;planOverlay(true,'Planning routes',r.value.k/(r.value.n+1),'Trying grouping '+r.value.k+' of '+r.value.n);await new Promise(res=>setTimeout(res,0))}}
+async function planDayAsync(stops,locked){planOverlay(true,'Planning routes'+(PLAN_LABEL?' · '+PLAN_LABEL:''),0,'Starting');await new Promise(r=>setTimeout(r,30));
+ try{const g=planDayGen(stops,locked);for(;;){const r=g.next();if(r.done)return r.value;planOverlay(true,'Planning routes'+(PLAN_LABEL?' · '+PLAN_LABEL:''),r.value.k/(r.value.n+1),'Trying grouping '+r.value.k+' of '+r.value.n);await new Promise(res=>setTimeout(res,0))}}
  finally{planOverlay(false)}}
 
 /* ---------- icons ---------- */
@@ -857,7 +891,7 @@ function renderUpload(){
   const det=f.status==='ok'?`${plural(f.orders.length,'order')} · ${m3(f.orders.reduce((a,o)=>a+o.cbm,0))} m³ · delivery ${f.dates.length?f.dates.map(niceDate).join(', '):'date not found'}`
    :f.status==='bad'?`${esc(f.msg)}${f.seen&&f.seen.length?'<br>What I found: '+f.seen.map(esc).join(' | '):''}`:'';
   return `<div class="file ${f.status==='bad'?'bad':''}"><div><div class="fn">${esc(f.name)}</div><div class="sub">${kb(f.size)} · ${info}</div></div><button class="btn ghost sm" data-act="remove" data-i="${i}">Remove</button><div class="d2">${det}</div></div>`}).join('');
- const multi=sm.dates.length>1?`<span class="chip warn">${sm.dates.length} different delivery dates will be routed together</span>`:'';
+ const multi=sm.dates.length>1?`<span class="chip info">${sm.dates.length} delivery dates: each is planned as its own day</span>`:'';
  return `<div class="drop${state.over?' over':''}" id="drop"><h2>Add the delivery summaries</h2><p>Drop the Excel files here, or choose them below. A whole folder works too, so a supervisor can add everything received for the day in one go.</p>
  <div class="row"><button class="btn" data-act="pick">Choose files</button><button class="btn ghost" data-act="pickdir">Choose a folder</button></div>
  <span class="sub">Recognised today: the GroupeSeb Open Items List. Other customers' layouts need a converter first.</span>
@@ -878,13 +912,22 @@ async function dropFiles(dt){
  return out;}
 async function build(){
  if(state.busy)return;state.busy=true;toast('Placing stops on the map and planning routes…');
- const sm=summary();const b=buildStops(sm.ok);
- S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
- state.dateISO=sm.dates.slice().sort()[0]||new Date().toISOString().slice(0,10);
- state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
- try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
- state.busy=false;
- state.deferred=[];state.routes=await planDayAsync(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
+ const sm=summary();const dates=sm.dates.slice().sort();const multi=dates.length>1;const sets=multi?dates:[null];
+ state.days=multi?{}:null;state.dayCur=null;const baseUnits=clone(state.units);
+ for(let di=0;di<sets.length;di++){const d=sets[di];
+  const fl=multi?sm.ok.map(f=>Object.assign({},f,{orders:f.orders.filter(o=>(o.date||dates[0])===d)})).filter(f=>f.orders.length):sm.ok;
+  const b=buildStops(fl);
+  S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
+  state.dateISO=d||dates[0]||new Date().toISOString().slice(0,10);
+  state.dateLabel=d?niceDate(d):(sm.dates.length?sm.dates.map(niceDate).join(' and '):'');
+  state.units=clone(baseUnits);
+  try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
+  PLAN_LABEL=multi?'day '+(di+1)+' of '+sets.length+' ('+niceDate(d)+')':'';
+  state.deferred=[];state.routes=await planDayAsync(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();
+  if(multi){state.dayCur=d;daySave()}}
+ PLAN_LABEL='';state.busy=false;
+ if(multi){const t=sgToday();dayLoad(dates.includes(t)?t:dates[0])}
+ state.step='routes';render();window.scrollTo(0,0);}
 
 /* ---------- ship-to list module ---------- */
 function renderShipto(){
@@ -963,12 +1006,12 @@ function addrCell(s){
  return esc(s.addr);}
 function noteChips(s){
  const lbl={noaddr:s.addrSrc==='order'?'Confirm address':'Add address',postal:'Add postal code',conflict:'Order and master differ'};
- const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location'};
+ const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location',night:'Night delivery',nocbm:'Volume missing: check',timeq:'Check the time in the remarks',split:s.split?('Load '+s.split.k+' of '+s.split.n+' (total '+s.split.total+' m³)'):'Split load'};
  let h='';
  for(const f of s.flags){
   if(REVIEW.includes(f)){const r=state.resolved[key(s.id,f)];
    h+=r?`<span class="chip ok">${r.book?'Saved address':'Confirmed'}</span>`:`<button class="chip btn" data-act="open" data-id="${s.id}">${lbl[f]}</button>`;}
-  else if(info[f])h+=`<span class="chip ${f==='newship'||f==='approx'?'warn':'info'}">${info[f]}</span>`;}
+  else if(info[f])h+=`<span class="chip ${f==='newship'||f==='approx'||f==='nocbm'||f==='timeq'||f==='night'?'warn':'info'}">${info[f]}</span>`;}
  return h;}
 function detail(s){
  let cols='';
@@ -996,7 +1039,7 @@ function routeCard(rt,rts){
  const as=state.assign[rt.id]||{};
  const asg=`<div class="asg"><label>Vehicle<input type="text" data-asg="${rt.id}" data-k="veh" value="${esc(as.veh||'')}" placeholder="Plate number" list="plates" autocomplete="off"></label><label>Driver<input type="text" data-asg="${rt.id}" data-k="drv" value="${esc(as.drv||'')}" placeholder="Driver name" autocomplete="off"></label></div>`;
  const lk=(state.links||{})[rt.id];const lkHtml=lk?`<div class="why" style="flex-wrap:wrap"><span class="chip ok">Driver link ready</span><input type="text" readonly value="${esc(lk)}" style="flex:1 1 260px" aria-label="Driver link"><button class="btn ghost sm" data-act="copylink" data-id="${rt.id}">Copy link</button><a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent('Route '+rt.n+(as.drv?' ('+as.drv+')':'')+': '+lk)}">Send by WhatsApp</a></div>`:'';
- return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${routeZones(rt)?`<span class="chip info">${esc(routeZones(rt))}</span>`:''}${routeIsBig(rt)?'<span class="chip warn">Big order: own vehicle</span>':rt.ids.some(i=>S[i]&&isPrio(S[i]))?'<span class="chip info">Priority customer</span>':''}${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>DELIV_END?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
+ return `<section class="card route ${done?'done':''}"><div class="rh"><div class="rt"><span class="rid">Route ${rt.n}</span><span class="area">${esc(rt.label)}</span></div><div class="rmeta"><span><b>${plural(a.seq.length,'stop')}</b></span><span><b>${m3(a.cbm)}</b> m³</span><span>Needs <b>${a.need||'no single vehicle'}</b></span>${routeZones(rt)?`<span class="chip info">${esc(routeZones(rt))}</span>`:''}${routeIsBig(rt)?'<span class="chip warn">Big order: own vehicle</span>':rt.ids.some(i=>S[i]&&isPrio(S[i]))?'<span class="chip info">Priority customer</span>':''}${rt._v&&!rt._v.unplaced?`<span class="chip info">Vehicle ${rt._v.n}${rt._v.vt?' · '+esc(rt._v.vt):''}${rt._v.of>1?' · trip '+rt._v.i+' of '+rt._v.of:''}</span>`:''}${rt._v&&rt._v.tight?'<span class="chip warn">Tight fit: a van may need to follow</span>':''}${rt._v&&rt._v.short?'<span class="chip bad">No vehicle of this size left today</span>':''}${!a.seq.every(s=>s.noloc)&&a.e.end>dEndOf(a.e)?'<span class="chip bad">Finishes after 17:00</span>':''}<span>${a.seq.every(s=>s.noloc)?'Time not estimated':'Leaves <b>'+fmt(a.e.depart)+'</b>, back about '+fmt(a.e.end)}</span></div></div><div class="scroll"><table><thead><tr><th>#</th><th>Stop</th><th class="num">m³</th><th>Window</th><th>Arrives</th><th>Notes</th><th>Move to</th></tr></thead><tbody>${rows}</tbody></table></div>${asg}${lkHtml}<div class="rf">${foot}</div></section>`;}
 function kpi(title,val,pill,cls,extra){return `<div class="card kpi"><div class="ch">${title}</div><div class="kb"><b>${val}</b>${pill?`<span class="pill ${cls||''}">${pill}</span>`:''}${extra||''}</div></div>`}
 function vehicleCard(){
  const vp=state.vp;if(!vp)return '';
@@ -1029,7 +1072,7 @@ function renderRoutes(){
  const dl=`<datalist id="plates">${state.fleet.vehicles.map(v=>`<option value="${esc(v.plate)}">${esc(v.type)}</option>`).join('')}</datalist>`;
  return dl+`<div class="kpis">${kpi('Orders',orders,plural(stops.length,'stop'))}${kpi('Routes',rts.length,m3(tot)+' m³ in total')}${kpi('Vehicles',state.vp?state.vp.veh.length:'-',state.vp&&state.vp.veh.some(v=>v.trips.length>1)?'some do 2 trips':'one trip each')}${kpi('To confirm',pend,pend?'Blocks approval':'All clear',pend?'bad':'ok')}${kpi('Approved',appr+' of '+rts.length,'',null,`<div class="bar"><i style="width:${rts.length?appr/rts.length*100:0}%"></i></div>`)}</div>
  ${all?'<div class="done-msg">All routes approved. Type the plate and driver on each route, then press Save today&#39;s plan to keep it for 30 days.</div>':''}
- ${geoBanner()}${rulesCard()}${vehicleCard()}${shortBox()}${deferBox()}
+ ${dayTabs()}${geoBanner()}${rulesCard()}${vehicleCard()}${shortBox()}${deferBox()}
  ${rts.map(r=>routeCard(r,rts)).join('')}`;}
 
 /* ---------- side rail, top bar, tabs, notes ---------- */
@@ -1085,7 +1128,7 @@ function notes(){
   m.push({t:'Add the delivery summaries for the day. Today I can read the GroupeSeb Open Items List. Other customers need a converter, which starts from one sample file each.'});
   if(sm.ok.length)m.push({t:`Read ${plural(sm.orders,'order')} across ${plural(sm.stops.length,'stop')}.${sm.fresh?` ${plural(sm.fresh,'ship-to')} not on the master list will need an address before their route can be approved.`:''}`,a:[{l:'Build routes',act:'build'}]});
   if(bad.length)m.push({t:`I could not read ${bad.length===1?bad[0].name:plural(bad.length,'file')}. ${bad[0].msg}`});
-  if(sm.dates.length>1)m.push({t:'These files cover more than one delivery date. I would route them together, so check that is what you want.'});
+  if(sm.dates.length>1)m.push({t:'These files cover more than one delivery date. Each date is planned as its own day, with a tab for each.'});
   return m;}
  const rts=state.routes,stops=allStops();
  const pend=stops.reduce((a,s)=>a+pendingFlags(s).length,0);
@@ -1205,6 +1248,7 @@ document.addEventListener('click',ev=>{
  else if(a==='printroute'){printRoute(t.dataset.id)}
  else if(a==='replan')replanToday()
  else if(a==='replanall')replanAll()
+ else if(a==='day')switchDay(t.dataset.d)
  else if(a==='unlearn'){delete LESS[t.dataset.k];lessSave();toast('Removed.');render()}
  else if(a==='unlearnall'){LESS={};lessSave();toast('All saved moves removed.');render()}
  else if(a==='mergeinto'){const from=state.routes.find(r=>r.id===t.dataset.from),to=state.routes.find(r=>r.id===t.dataset.to);if(!from||!to)return;
@@ -1276,7 +1320,7 @@ function shortOptions(rt){
   const s2=r2.ids.map(i=>S[i]);if(s2.some(s=>s.noloc))continue;
   const merged=bestSeq(s2.concat(seq));const cbm2=merged.reduce((a,s)=>a+s.cbm,0);
   if(cbm2>fleetCap(merged.some(s=>s.maxH))+1e-9)continue;
-  const e=evalRoute(merged);if(e.late>0||e.end>DELIV_END)continue;
+  const e=evalRoute(merged);if(e.late>0||e.end>dEndOf(e))continue;
   const trial=state.routes.filter(r=>r!==rt).map(r=>r===r2?Object.assign({},r2,{ids:merged.map(s=>s.id)}):r);
   if(trialShort(trial)>=nowShort){res.blocked++;continue}
   const base=evalRoute(s2);
@@ -1285,7 +1329,7 @@ function shortOptions(rt){
  let best=null;
  for(const v of vp.veh.filter(v=>!v.unplaced&&!v.short&&v.trips.length)){
   let md=v.free,ld=v.lunch;if(!ld&&md>=LUNCH_AT){md+=LUNCH_MIN;ld=true}
-  const r=evalRouteAt(seq,md,ld);const over=Math.max(0,r.end-DELIV_END);const late=Math.max(0,...r.legs.filter(l=>!l.stop.noloc).map(l=>l.late||0));
+  const r=evalRouteAt(seq,md,ld);const over=Math.max(0,r.end-dEndOf(r));const late=Math.max(0,...r.legs.filter(l=>!l.stop.noloc).map(l=>l.late||0));
   const back=v.trips[v.trips.length-1].back;
   const sc=late*1000+over;
   if(!best||sc<best.sc)best={sc,v,r,over,late,back};}
@@ -1349,6 +1393,19 @@ document.addEventListener('change',ev=>{const t=ev.target;if(!t)return;
  else if(t.id==='rl_mkm'){const v=parseFloat(String(t.value).replace(',','.'));RULES.mixKm=isFinite(v)&&v>=0?v:25;rulesSave();render()}
  else if(t.id==='rl_zn'){RULES.zones=t.checked;rulesSave();render()}
  else if(t.dataset&&t.dataset.zone){const s=S[t.dataset.zone];if(!s)return;const auto=zoneAuto(s);if(t.value===auto)delete ZOV[zkey(s)];else ZOV[zkey(s)]=t.value;zovSave();s.zone=zoneOf(s);toast('Zone saved on this computer. Press Re-plan to apply it.');render()}});
+
+/* ---------- several delivery days in one file: each day is planned and approved on its own ---------- */
+const DAYKEYS=['routes','approved','assign','deferred','links','tokens','next','resolved','open','orders','dateISO','dateLabel','geo','vp','units'];
+function daySave(){if(!state.dayCur||!state.days)return;const d={S,ORDERS,INITIAL};DAYKEYS.forEach(k=>d[k]=state[k]);state.days[state.dayCur]=d}
+function dayLoad(iso){const d=state.days[iso];S=d.S;ORDERS=d.ORDERS;INITIAL=d.INITIAL;DAYKEYS.forEach(k=>state[k]=d[k]);state.dayCur=iso}
+function switchDay(iso){if(!state.days||!state.days[iso]||iso===state.dayCur)return;daySave();dayLoad(iso);try{applyBook()}catch(e){}try{state.vp=vehiclePlan()}catch(e){}render();window.scrollTo(0,0)}
+const dayName=iso=>{const d=new Date(iso+'T12:00:00Z');return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getUTCDay()]+' '+niceDate(iso).replace(/ \d{4}$/,'')};
+function dayTabs(){
+ if(!state.days)return '';const ks=Object.keys(state.days).sort();if(ks.length<2)return '';
+ daySave();
+ const btn=iso=>{const d=state.days[iso];const rts=(d.routes||[]).filter(r=>r.ids.length);const cbm=Object.values(d.S).reduce((a,s)=>a+s.cbm,0);const appr=rts.filter(r=>d.approved&&d.approved[r.id]).length;const on=iso===state.dayCur;
+  return `<button class="btn ${on?'':'ghost'} sm" data-act="day" data-d="${iso}" aria-pressed="${on}">${esc(dayName(iso))} · ${plural(rts.length,'route')} · ${m3(cbm)} m³ · ${appr}/${rts.length} approved</button>`};
+ return `<section class="card"><div class="ch">Delivery days<small>${plural(ks.length,'day')} in these files</small></div><div class="tb">${ks.map(btn).join(' ')}</div><div class="rf"><div class="why"><span class="sub">Each day is planned, approved and sent to drivers on its own. The vehicle counts below are for the day you are viewing, so set them for each day. Save each day's plan on its own page of Approve routes.</span></div></div></section>`;}
 
 /* ---------- saved day plans ---------- */
 const hm=v=>v==null?'':fmt(v);
