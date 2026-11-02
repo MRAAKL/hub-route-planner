@@ -466,7 +466,7 @@ async function geoStops(stops){
 
 /* ---------- planning rules: big orders and zones ---------- */
 const RKEY='hub_rules_v1',ZKEY='hub_zone_ov_v1';
-const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25};
+const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25,prioFirst:true,prioKm:15};
 try{Object.assign(RULES,JSON.parse(localStorage.getItem(RKEY)||'{}'))}catch(e){}
 let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
 const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
@@ -488,6 +488,12 @@ const isPrio=s=>isNamed(s)&&!isBig(s)?1:0;
 const routeIsBig=rt=>rt.ids.length===1&&!!S[rt.ids[0]]&&isBig(S[rt.ids[0]]);
 const routeZones=rt=>[...new Set(rt.ids.map(i=>S[i]&&S[i].zone).filter(Boolean))].map(x=>ZNAME[x]).join(' + ');
 const postalOf=s=>{const m=String(s.addr||'').match(/\b(\d{6})\b/);return m?m[1]:''};
+/* a priority customer goes first on its route when that costs under prioKm extra and nothing is late */
+const _bestSeq0=bestSeq;
+bestSeq=function(stops){const b=_bestSeq0(stops);if(!RULES.prioFirst||b.length<2)return b;
+ const pr=b.filter(s=>isPrio(s));if(!pr.length||pr.every((s,i)=>b[i]===s))return b;
+ const c=pr.concat(b.filter(s=>!isPrio(s)));const eb=evalRoute(b),ec=evalRoute(c);
+ if(ec.late>eb.late+1e-9||(ec.end>DELIV_END&&eb.end<=DELIV_END)||ec.dist>eb.dist+(+RULES.prioKm||15))return b;return c;};
 
 /* ---------- grouping into routes ---------- */
 function groupRoutes(stops,Pp,startN){
@@ -1271,7 +1277,7 @@ function rulesCard(){
  const rows=stops.filter(s=>!s.noloc).sort((a,b)=>(postalOf(a)||'999999').localeCompare(postalOf(b)||'999999')||String(a.name).localeCompare(String(b.name))).map(s=>`<tr><td class="nm">${esc(s.name)}${isBig(s)?' <span class="chip warn">big</span>':isPrio(s)?' <span class="chip info">priority</span>':''}<div class="sub">${esc(s.area||'')}</div></td><td class="mono">${esc(postalOf(s))}</td><td class="num">${m3(s.cbm)}</td><td class="nw"><select data-zone="${esc(s.id)}" aria-label="Zone for ${esc(s.name)}">${zs.map(z=>`<option value="${z}"${s.zone===z?' selected':''}>${ZNAME[z]}</option>`).join('')}</select>${ZOV[zkey(s)]?' <span class="sub">set by you</span>':''}</td></tr>`).join('');
  const nb=stops.filter(isBig).length;
  return `<section class="card"><div class="ch">Planning rules<small>1 big orders · 2 location · 3 customer timing (never broken)</small></div>
- <div class="tb"><span class="sub">Priority customers (planned first, may share a vehicle):</span> <input type="text" id="rl_names" value="${esc(RULES.bigNames)}" style="min-width:200px" aria-label="Big order names, separated by commas"> <span class="sub">anything above</span> <input type="text" inputmode="decimal" id="rl_cbm" value="${esc(RULES.bigCbm)}" style="width:48px" aria-label="Big order size in cubic metres"> <span class="sub">m³,</span> <label class="sub"><input type="checkbox" id="rl_rs"${RULES.roadshow?' checked':''}> or anything marked roadshow</label></div>
+ <div class="tb"><span class="sub">Priority customers (first on their route when it costs under 15 extra km; may share a vehicle):</span> <input type="text" id="rl_names" value="${esc(RULES.bigNames)}" style="min-width:200px" aria-label="Big order names, separated by commas"> <span class="sub">anything above</span> <input type="text" inputmode="decimal" id="rl_cbm" value="${esc(RULES.bigCbm)}" style="width:48px" aria-label="Big order size in cubic metres"> <span class="sub">m³,</span> <label class="sub"><input type="checkbox" id="rl_rs"${RULES.roadshow?' checked':''}> or anything marked roadshow</label></div>
  <div class="tb"><label class="sub"><input type="checkbox" id="rl_zn"${RULES.zones?' checked':''}> Keep each route in one zone (North, South, East, West)</label> <button class="btn sm" data-act="replanall">Re-plan everything with these rules</button></div>
  <div class="tb"><label class="sub"><input type="checkbox" id="rl_mix"${RULES.mix?' checked':''}> Let a route cross zones when it saves a vehicle, up to</label> <input type="text" inputmode="numeric" id="rl_mkm" value="${esc(RULES.mixKm)}" style="width:44px" aria-label="Most extra kilometres"> <span class="sub">extra km in total</span></div>
  <div class="tb"><span class="sub">${plural(nb,'big order')} and ${plural(stops.filter(isPrio).length,'priority customer')} in this day. Each gets its own vehicle first, and that vehicle may take a nearby second trip. Changing a rule does not change the routes until you press Re-plan.</span></div>
