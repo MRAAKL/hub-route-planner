@@ -502,15 +502,30 @@ bestSeq=function(stops){const b=_bestSeq0(stops);if(!RULES.prioFirst||b.length<2
  const pr=b.filter(s=>isPrio(s));if(!pr.length||pr.every((s,i)=>b[i]===s))return b;
  const c=pr.concat(b.filter(s=>!isPrio(s)));const eb=evalRoute(b),ec=evalRoute(c);
  if(ec.late>eb.late+1e-9||(ec.end>DELIV_END&&eb.end<=DELIV_END)||ec.dist>eb.dist+(+RULES.prioKm||15))return b;return c;};
+const maxHop=seq=>{let m=0;for(let i=1;i<seq.length;i++){if(seq[i].noloc||seq[i-1].noloc)continue;m=Math.max(m,km(seq[i-1],seq[i]))}return m};
+
+/* ---------- learning from planners' moves (kept in this browser) ---------- */
+const LKEY='hub_lessons_v1',LDAYS=60;let LRN_MSG='';
+let LESS={};try{LESS=JSON.parse(localStorage.getItem(LKEY)||'{}')||{}}catch(e){}
+const lessSave=()=>{try{localStorage.setItem(LKEY,JSON.stringify(LESS))}catch(e){}};
+const lkey=(a,b)=>{const x=zkey(a),y=zkey(b);return x<y?x+'||'+y:y+'||'+x};
+(function(){const cut=Date.now()-LDAYS*864e5;let ch=false;for(const k in LESS)if(!(LESS[k].last>cut)){delete LESS[k];ch=true}if(ch)lessSave()})();
+const learned=(a,b)=>a!==b&&zkey(a)!==zkey(b)&&!!LESS[lkey(a,b)];
+const tied=(a,b)=>km(a,b)<0.2||learned(a,b);
+function learnMove(id,fromIds,toIds){LRN_MSG='';const s=S[id];if(!s||s.noloc||!toIds.length)return;
+ fromIds.forEach(f=>{const o=S[f];if(o&&LESS[lkey(s,o)])delete LESS[lkey(s,o)]});
+ const now=Date.now();let n=0;
+ toIds.slice(0,8).forEach(t=>{const o=S[t];if(!o||o.noloc||zkey(o)===zkey(s))return;const k=lkey(s,o);const e=LESS[k]||{n:0,at:now};e.n++;e.last=now;e.a=s.name;e.b=o.name;LESS[k]=e;n++});
+ lessSave();if(n)LRN_MSG='Saved for next time: '+s.name.slice(0,30)+' is kept with '+plural(n,'stop')+' of this route. You can remove it on the Planning rules card.'}
 
 /* ---------- grouping into routes ---------- */
 function groupRoutes(stops,Pp,startN){
- const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420,zp:0},Pp||{});
+ const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420,zp:0,hop:0},Pp||{});
  for(const s of stops.slice().sort((a,b)=>(isPrio(b)-isPrio(a))||b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
   for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
-   const seq=bestSeq(trial);const r=evalRoute(seq);if(r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
-   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0)-((!s.noloc&&rt.seq.some(x=>!x.noloc&&km(x,s)<0.2))?500:0);
+   const seq=bestSeq(trial);const r=evalRoute(seq);if((P.hop&&maxHop(seq)>P.hop&&maxHop(seq)>maxHop(rt.seq)+1e-9)||r.late>0||r.dur>P.maxDur||(r.end>DELIV_END&&evalRoute(rt.seq).end<=DELIV_END))continue;
+   const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0)-((!s.noloc&&rt.seq.some(x=>!x.noloc&&tied(x,s)))?500:0);
    if(sc<bs){bs=sc;best={rt,seq}}}
   if(best&&bs<P.open)best.rt.seq=best.seq;else routes.push({seq:[s],big});}
  routes.sort((a,b)=>evalRoute(a.seq).depart-evalRoute(b.seq).depart||evalRoute(a.seq).end-evalRoute(b.seq).end);
@@ -748,12 +763,12 @@ function vehiclePlan(){
 /* ---------- merge routes across zones when that saves a vehicle ---------- */
 function vcount(routes){const keep=state.routes;state.routes=routes;let n=0,sh=0;try{const v=vehiclePlan().veh.filter(v=>!v.unplaced);n=v.length;sh=v.filter(x=>x.short).length}finally{state.routes=keep}return {n,sh}}
 function splitPairs(routes){let n=0;const L=routes.map(r=>r.ids.map(i=>S[i]).filter(s=>!s.noloc));
- for(let i=0;i<L.length;i++)for(let j=i+1;j<L.length;j++)for(const a of L[i])for(const b of L[j])if(km(a,b)<0.2)n++;return n}
+ for(let i=0;i<L.length;i++)for(let j=i+1;j<L.length;j++)for(const a of L[i])for(const b of L[j])if(tied(a,b))n++;return n}
 /* stops at the same place (same mall or building) go on one route when that is feasible */
 function colocRepair(cur){
  for(let guard=0;guard<10;guard++){let moved=false;
   outer:for(let i=0;i<cur.length;i++)for(const a of cur[i].ids.map(x=>S[x])){if(a.noloc||isBig(a))continue;
-   for(let j=0;j<cur.length;j++){if(j===i)continue;if(!cur[j].ids.map(x=>S[x]).some(b=>!b.noloc&&!isBig(b)&&km(a,b)<0.2))continue;
+   for(let j=0;j<cur.length;j++){if(j===i)continue;if(!cur[j].ids.map(x=>S[x]).some(b=>!b.noloc&&!isBig(b)&&tied(a,b)))continue;
     const dest=cur[j].ids.map(x=>S[x]).concat([a]);const cbm=dest.reduce((s,x)=>s+x.cbm,0);if(cbm>fleetCap(dest.some(s=>s.maxH))+1e-9)continue;
     const seq=bestSeq(dest);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END)continue;
     const rest=cur[i].ids.filter(x=>x!==a.id);const nc=cur.slice();nc[j]=Object.assign({},cur[j],{ids:seq.map(s=>s.id),label:routeLabel(seq)});
@@ -771,10 +786,11 @@ function consolidate(routes,locked,startN){
     const A=cur[i],B=cur[j];const all=A.ids.concat(B.ids).map(x=>S[x]);
     if(all.some(s=>s.noloc||isBig(s)))continue;
     const cbm=all.reduce((a,s)=>a+s.cbm,0);if(cbm>fleetCap(all.some(s=>s.maxH))+1e-9)continue;
-    const seq=bestSeq(all);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END||e.dur>(window.MAXDAY||420))continue;
+    const seq=bestSeq(all);const e=evalRoute(seq);if(e.late>0||e.end>DELIV_END||e.dur>(window.MAXDAY||420)||maxHop(seq)>(A.ids.length<=1&&A.ids.reduce((a,x)=>a+S[x].cbm,0)<1||B.ids.length<=1&&B.ids.reduce((a,x)=>a+S[x].cbm,0)<1?16:10))continue;
     const trial=cur.filter((_,k)=>k!==i&&k!==j).concat([{id:A.id,n:A.n,label:routeLabel(seq),ids:seq.map(s=>s.id)}]);
-    const v=vcount(locked.concat(trial));if(v.sh>base.sh||v.n>=base.n)continue;
-    const add=dist(trial)-d0;if(add>(+RULES.mixKm||0))continue;
+    const v=vcount(locked.concat(trial));const tiny=A.ids.length<=1&&A.ids.reduce((a,x)=>a+S[x].cbm,0)<1||B.ids.length<=1&&B.ids.reduce((a,x)=>a+S[x].cbm,0)<1;
+    if(v.sh>base.sh||v.n>base.n||(v.n===base.n&&!tiny))continue;
+    const add=dist(trial)-d0;if(add>(tiny&&v.n===base.n?15:(+RULES.mixKm||0)))continue;
     if(!bm||v.n<bm.v.n||(v.n===bm.v.n&&add<bm.add))bm={trial,v,add}}
    if(!bm)break;cur=bm.trial}}
  const keep=state.routes;state.routes=[];
@@ -782,21 +798,29 @@ function consolidate(routes,locked,startN){
  const o=startN?startN-1:0;return cur.map((r,i)=>({id:'R'+(o+i+1),n:o+i+1,label:r.label,ids:r.ids}));}
 
 /* try several groupings and keep the one that fits the vehicles listed best */
-function planDay(stops,locked){
+function* planDayGen(stops,locked){
  locked=locked||[];refreshZones();
  if(!locked.length){state.links={};state.tokens={};}
  const startN=locked.length?Math.max(state.next||1,...locked.map(r=>r.n+1),...locked.map(r=>(+String(r.id).slice(1)||0)+1)):0;
- const cands=[];for(const zp of (RULES.zones?[1e6,40]:[0]))for(const open of [10,20,30,45])for(const cap of [0,12,10])for(const maxDur of [420,300])cands.push({open,cap,maxDur,zp});
- let best=null;const fewest=state.pstyle==='fewest';
+ const cands=[];for(const hop of [0,8,12])for(const zp of (RULES.zones?[1e6,40]:[0]))for(const open of [10,20,30,45])for(const cap of [0,12,10])for(const maxDur of [420,300])cands.push({open,cap,maxDur,zp,hop});
+ let best=null,K=0;const fewest=state.pstyle==='fewest';
  for(const P of cands){
   const routes=groupRoutes(stops,P,startN);state.routes=locked.concat(routes);const vp=vehiclePlan();
   const placed=vp.veh.filter(v=>!v.unplaced);
   const short=placed.filter(v=>v.short).length,prime=placed.filter(v=>v.prime).length,tight=placed.filter(v=>v.tight).length;
-  let dist=0,maxDur=0,late=0,mixed=0;
-  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
-  const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+splitPairs(routes)*5e3+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
-  if(!best||sc<best.sc)best={sc,routes:clone(routes)};}
+  let dist=0,maxDur=0,late=0,mixed=0,hopPen=0;
+  for(const rt of routes){const seq=rt.ids.map(i=>S[i]);if(seq.every(s=>s.noloc))continue;if(RULES.zones&&new Set(seq.map(s=>s.zone).filter(Boolean)).size>1)mixed++;const e=evalRoute(seq);dist+=e.dist;hopPen+=Math.max(0,maxHop(seq)-10)*400;maxDur=Math.max(maxDur,e.dur);if(e.end>DELIV_END)late++;}
+  const sc=short*1e6+late*5e5+prime*1e5+mixed*2e4+hopPen+routes.filter(r=>r.ids.length===1&&!isBig(S[r.ids[0]])&&!S[r.ids[0]].noloc&&S[r.ids[0]].cbm<1).length*3e3+splitPairs(routes)*5e3+(fewest?placed.length*1e3+dist:tight*200+dist+maxDur*0.3+placed.length*80);
+  if(!best||sc<best.sc)best={sc,routes:clone(routes)};yield {k:++K,n:cands.length};}
  best.routes=consolidate(best.routes,locked,startN);state.routes=locked.concat(best.routes);vehiclePlan();return state.routes;}
+function planDay(stops,locked){const g=planDayGen(stops,locked);let r;do{r=g.next()}while(!r.done);return r.value}
+function planOverlay(on,txt,frac,sub){let o=document.getElementById('planov');if(!on){if(o)o.remove();return}
+ if(!o){o=document.createElement('div');o.id='planov';o.setAttribute('role','status');o.setAttribute('aria-live','polite');o.style.cssText='position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center';
+  o.innerHTML='<div style="background:var(--card,#fff);color:var(--ink,#111);border:1px solid var(--line,#ddd);border-radius:12px;padding:20px 24px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.3)"><div id="planov-t" style="font-weight:600;margin-bottom:10px"></div><div style="height:8px;border-radius:4px;background:var(--line,#ddd);overflow:hidden"><div id="planov-b" style="height:100%;width:0;background:var(--ink,#111);transition:width .15s"></div></div><div id="planov-s" style="font-size:13px;margin-top:8px;color:var(--muted2,#666)"></div></div>';document.body.appendChild(o)}
+ document.getElementById('planov-t').textContent=txt;document.getElementById('planov-b').style.width=Math.round(frac*100)+'%';document.getElementById('planov-s').textContent=sub||''}
+async function planDayAsync(stops,locked){planOverlay(true,'Planning routes',0,'Starting');await new Promise(r=>setTimeout(r,30));
+ try{const g=planDayGen(stops,locked);for(;;){const r=g.next();if(r.done)return r.value;planOverlay(true,'Planning routes',r.value.k/(r.value.n+1),'Trying grouping '+r.value.k+' of '+r.value.n);await new Promise(res=>setTimeout(res,0))}}
+ finally{planOverlay(false)}}
 
 /* ---------- icons ---------- */
 const ic=p=>`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -860,7 +884,7 @@ async function build(){
  state.dateLabel=sm.dates.length?sm.dates.map(niceDate).join(' and '):'';
  try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
  state.busy=false;
- state.deferred=[];state.routes=planDay(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
+ state.deferred=[];state.routes=await planDayAsync(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();state.step='routes';render();window.scrollTo(0,0);}
 
 /* ---------- ship-to list module ---------- */
 function renderShipto(){
@@ -1124,10 +1148,10 @@ function printRoute(id){
 document.addEventListener('input',ev=>{const t=ev.target.closest('input[data-asg]');if(!t)return;const id=t.dataset.asg;state.assign[id]=Object.assign(state.assign[id]||{},{[t.dataset.k]:t.value});
  const rt=state.routes.find(r=>r.id===id);if(rt&&rt._v&&rt._v.of>1)state.routes.filter(r=>r.id!==id&&r._v&&r._v.n===rt._v.n).forEach(r=>{state.assign[r.id]=Object.assign(state.assign[r.id]||{},{[t.dataset.k]:t.value});const el=document.querySelector('input[data-asg="'+r.id+'"][data-k="'+t.dataset.k+'"]');if(el)el.value=t.value;});});
 document.addEventListener('change',ev=>{const t=ev.target;if(t&&t.dataset&&t.dataset.unit){state.units[t.dataset.unit]=t.value.replace(/\D/g,'');render();}});
-document.addEventListener('change',ev=>{const t=ev.target;
+document.addEventListener('change',async ev=>{const t=ev.target;
  if(t&&t.id==='pstyle'){state.pstyle=t.value;const ok=!Object.keys(state.approved).some(k=>state.approved[k])||confirm('Re-planning will undo the routes you approved and any stops you moved. Continue?');
   if(!ok){render();return}
-  state.deferred=[];state.routes=planDay(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};render();}});
+  state.deferred=[];state.routes=await planDayAsync(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};render();}});
 function wireFleet(){
  const ff=document.getElementById('ff'),pf=document.getElementById('pf');if(!ff)return;
  ff.addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -1181,6 +1205,8 @@ document.addEventListener('click',ev=>{
  else if(a==='printroute'){printRoute(t.dataset.id)}
  else if(a==='replan')replanToday()
  else if(a==='replanall')replanAll()
+ else if(a==='unlearn'){delete LESS[t.dataset.k];lessSave();toast('Removed.');render()}
+ else if(a==='unlearnall'){LESS={};lessSave();toast('All saved moves removed.');render()}
  else if(a==='mergeinto'){const from=state.routes.find(r=>r.id===t.dataset.from),to=state.routes.find(r=>r.id===t.dataset.to);if(!from||!to)return;
   to.ids=to.ids.concat(from.ids);sequence(to);state.routes=state.routes.filter(r=>r!==from);delete state.approved[from.id];delete state.approved[to.id];delete state.assign[from.id];if(state.links)delete state.links[from.id];
   toast('Route '+from.n+' added to Route '+to.n+'. Route '+to.n+' needs approving again.');render()}
@@ -1201,10 +1227,10 @@ document.addEventListener('change',ev=>{
  const id=t.dataset.id,from=rts.find(r=>r.id===t.dataset.from);let to;
  if(t.value==='NEW'){const n=Math.max(0,...rts.map(r=>r.n))+1;to={id:'R'+(state.next++),n,label:'New route',ids:[]};rts.push(to)}else to=rts.find(r=>r.id===t.value);
  if(!to||to===from){render();return}
- from.ids=from.ids.filter(x=>x!==id);to.ids.push(id);sequence(to);if(from.ids.length)sequence(from);
+ learnMove(id,from.ids.filter(x=>x!==id),to.ids.slice());from.ids=from.ids.filter(x=>x!==id);to.ids.push(id);sequence(to);if(from.ids.length)sequence(from);
  delete state.approved[from.id];delete state.approved[to.id];
  if(!from.ids.length)state.routes=rts.filter(r=>r!==from);
- toast('Moved. Route '+to.n+(from.ids.length?' and Route '+from.n:'')+' need approving again.');render()});
+ toast('Moved. Route '+to.n+(from.ids.length?' and Route '+from.n:'')+' need approving again.'+(LRN_MSG?' '+LRN_MSG:''));render()});
 state.fleet=fleetFromRaw(FLEET_DEFAULT);
 render();
 if(SYNC.code)syncPull().then(()=>render());
@@ -1212,7 +1238,7 @@ if(SYNC.code)syncPull().then(()=>render());
 
 /* ---------- morning re-plan, shortfalls, next-day list ---------- */
 const routeNum=r=>+String(r.id).slice(1)||0;
-function replanToday(){
+async function replanToday(){
  const isShort=r=>!!(r._v&&r._v.short);
  const locked=state.routes.filter(r=>state.approved[r.id]&&!isShort(r)&&r.ids.length);
  const lockedSet=new Set(locked);
@@ -1225,7 +1251,7 @@ function replanToday(){
  state.next=Math.max(state.next||1,...state.routes.map(r=>routeNum(r)+1));
  dropped.forEach(r=>{delete state.assign[r.id];delete state.approved[r.id];if(state.links)delete state.links[r.id];if(state.tokens)delete state.tokens[r.id]});
  const before=state.routes.length;
- state.routes=planDay(pool,locked);
+ state.routes=await planDayAsync(pool,locked);
  state.next=Math.max(...state.routes.map(r=>routeNum(r)+1),state.next);
  INITIAL=clone(state.routes);
  const nowShort=(state.vp=vehiclePlan(),state.vp.veh.filter(v=>!v.unplaced&&v.short).length);
@@ -1303,11 +1329,16 @@ function rulesCard(){
  <div class="tb"><label class="sub"><input type="checkbox" id="rl_zn"${RULES.zones?' checked':''}> Keep each route in one zone (North, South, East, West)</label> <button class="btn sm" data-act="replanall">Re-plan everything with these rules</button></div>
  <div class="tb"><label class="sub"><input type="checkbox" id="rl_mix"${RULES.mix?' checked':''}> Let a route cross zones when it saves a vehicle, up to</label> <input type="text" inputmode="numeric" id="rl_mkm" value="${esc(RULES.mixKm)}" style="width:44px" aria-label="Most extra kilometres"> <span class="sub">extra km in total</span></div>
  <div class="tb"><span class="sub">${plural(nb,'big order')} and ${plural(stops.filter(isPrio).length,'priority customer')} in this day. Each gets its own vehicle first, and that vehicle may take a nearby second trip. Changing a rule does not change the routes until you press Re-plan.</span></div>
+ ${lessonsBox()}
  <details id="zdet" style="padding:0 14px 12px"${state.zopen?' open':''}><summary class="sub" style="cursor:pointer">Where each stop landed (check the zones and correct any)</summary><div class="scroll"><table><thead><tr><th>Ship-to</th><th>Postal</th><th class="num">m³</th><th>Zone</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;}
-function replanAll(){
+function lessonsBox(){
+ const ks=Object.keys(LESS).sort((a,b)=>LESS[b].last-LESS[a].last);
+ const rows=ks.map(k=>{const e=LESS[k];const d=new Date(e.last).toISOString().slice(0,10);return `<tr><td class="nm">${esc(e.a)}<div class="sub">with ${esc(e.b)}</div></td><td class="num">${e.n}×</td><td class="nw">${esc(d)}</td><td><button class="link" data-act="unlearn" data-k="${esc(k)}">Remove</button></td></tr>`}).join('');
+ return `<details id="ldet" style="padding:0 14px 8px"><summary class="sub" style="cursor:pointer">Moves the planner has learned from you (${ks.length})</summary>${ks.length?`<div class="sub" style="margin:6px 0">When you move a stop into a route, the planner keeps it with those stops next time if it stays on time, within 17:00 and within the vehicle. Saved on this computer for 60 days, renewed each time you repeat it.</div><div class="scroll"><table><thead><tr><th>Stop</th><th class="num">Times</th><th>Last</th><th></th></tr></thead><tbody>${rows}</tbody></table></div><div class="tb"><button class="btn ghost sm" data-act="unlearnall">Remove all</button></div>`:'<div class="sub" style="margin:6px 0">Nothing yet. Use Move to on a stop and it will be remembered here.</div>'}</details>`;}
+async function replanAll(){
  const hasAppr=Object.keys(state.approved).some(k=>state.approved[k]);
  if(hasAppr&&!confirm('Re-planning replaces every route, including the ones you approved or sent to drivers. Continue?'))return;
- state.deferred=[];state.assign={};state.routes=planDay(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};
+ state.deferred=[];state.assign={};state.routes=await planDayAsync(Object.values(S));INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};
  toast('Re-planned with the current rules: '+plural(state.routes.length,'route')+'.');render();}
 document.addEventListener('toggle',ev=>{if(ev.target&&ev.target.id==='zdet')state.zopen=ev.target.open},true);
 document.addEventListener('change',ev=>{const t=ev.target;if(!t)return;
