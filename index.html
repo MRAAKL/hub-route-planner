@@ -368,6 +368,14 @@ function fmtDate(v){
  return '';}
 const niceDate=d=>{if(!d)return '';const [y,m,dd]=d.split('-');return +dd+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]+' '+y};
 function normCode(v){if(v==null||v==='')return null;const s=String(v).trim();const m=s.match(/\b66\d{6}\b/);return m?m[0]:s}
+/* dates: trust "Date: 1 Nov 2026" in the remarks; with no unambiguous date, pick the day/month order that lands nearest today */
+function fixDates0(orders){
+ const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};const pd=n=>String(n).padStart(2,'0');
+ orders.forEach(o=>{const m=String(o.remarks||'').match(/\\bdate\\s*:\\s*(\\d{1,2})\\s+([A-Za-z]{3})[a-z]*\\.?\\s+(\\d{4})/i);if(m&&MON[m[2].toLowerCase()]){o.date=m[3]+'-'+pd(MON[m[2].toLowerCase()])+'-'+pd(m[1]);o.dateFromRemark=true}});
+ const T=iso=>{const [y,m,d]=iso.split('-').map(Number);return Date.UTC(y,m-1,d)/864e5};
+ if(orders.some(o=>o.date&&+o.date.split('-')[2]>12))return;
+ const tod=Math.floor((Date.now()+8*3600e3)/864e5);
+ orders.forEach(o=>{if(o.dateFromRemark||!o.date)return;const [y,m,d]=o.date.split('-');if(+d>12||m===d)return;const sw=y+'-'+d+'-'+m;if(Math.abs(T(o.date)-tod)>35&&Math.abs(T(sw)-tod)<=35)o.date=sw});}
 function fixDates(orders){fixDates2(orders);fixDates1(orders)}
 function fixDates2(orders){
  const T=iso=>{const [y,m,d]=iso.split('-').map(Number);return Date.UTC(y,m-1,d)/864e5};
@@ -395,7 +403,7 @@ function parseSheet(rows){
    const remarks=iRem>=0&&row[iRem]!=null?String(row[iRem]).trim():'';
    orders.push({doc:String(doc),code:iCode>=0?normCode(row[iCode]):null,name:String(row[iName]||'').replace(/\s+/g,' ').trim(),ref:iRef>=0?row[iRef]:'',date:fmtDate(iDate>=0?row[iDate]:''),remarks,qty:iQty>=0?+row[iQty]||0:0,cbm:Math.round(cbm*100000)/100000,
     type:/^CA/i.test(String(doc))||/collect/i.test(remarks)?'Collection':'Delivery',cust:'GroupeSeb'});}
-  fixDates(orders);return orders;}
+  fixDates0(orders);fixDates(orders);return orders;}
  return null;}
 function readAddrs(wb){
  const out={};
@@ -448,6 +456,11 @@ function buildStops(files){
     if(remOk)cands.push({postal:'',text:rem});
     s.hint={cands};}
    if(!(be&&be.addr)&&s.addrSrc==='missing'&&(fileAddr||remOk)){const t=fileAddr||rem;s.addr=t.replace(/\s+/g,' ').replace(/^deliver to\s*/i,'').slice(0,150);s.addrSrc='order';s.raw=t;}}
+  {const rem=String((dels[0]||os[0]).remarks||'').replace(/\s+/g,' ');const docs=new Set(os.map(o=>String(o.doc||'')));let rp='';const re=/\b(\d{6})\b/g;let mm;
+   while((mm=re.exec(rem))){const ctx=rem.slice(Math.max(0,mm.index-100),mm.index);if(docs.has(mm[1]))continue;if(/\b(do|po|inv|invoice|order|ref|doc)\W*#?\s*$/i.test(ctx))continue;
+    if(/\b(road|rd|street|st|avenue|ave|drive|dr|lane|crescent|way|walk|central|boulevard|close|place|jalan|singapore|sg|deliver(?:y)? to|address)\b/i.test(ctx)){rp=mm[1];break}}
+   const mp=postalOf(s)||(tpl&&postalOf(tpl))||'';
+   if(rp&&rp!==mp){s.noloc=true;s.lat=WH.lat;s.lng=WH.lng;{const am=rem.match(/\b\d{1,4}[A-Za-z]?\s+[A-Za-z0-9' ]{3,40}\b(?:road|rd|street|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place)\b.*/i);s.addr=(am?am[0]:rem).slice(0,150)+' S('+rp+')';}s.addrSrc='order';s.remPostal=rp;s.hint={cands:[{postal:rp,text:rem}]};s.flags=(s.flags||[]).filter(f=>f!=='newship'&&f!=='noaddr').concat(['remaddr']);}}
   {const nm=os.map(o=>String(o.remarks||'').match(/time\s*[:\-]?\s*(\d{1,2})[:.]?(\d{2})?\s*pm\b/i)).find(Boolean);if(!s.win&&nm&&+nm[1]>=8&&+nm[1]<12){s.night=true;s.win=[(+nm[1]+12)*60+(+nm[2]||0),null];s.flags.push('night');}}
   if(os.some(o=>o.qty>0&&!(o.cbm>0)))s.flags.push('nocbm');
   if(!s.win&&!s.night&&os.some(o=>/\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)\b/i.test(o.remarks||'')))s.flags.push('timeq');
@@ -549,6 +562,23 @@ function splitOversize(stops,orders){const out=[];const ords=Object.assign({},or
 
 /* night deliveries (e.g. roadshow set-up at 10:30pm) are planned on their own and may run past 17:00 */
 function dEndOf(r){const g=r&&r.legs;if(!g||!g.length)return DELIV_END;const k=g.filter(l=>l.stop.night).length;return k===0?DELIV_END:(k===g.length?30*60:-1)}
+
+/* teach the planner from your planners' routes: every pair of stops they put on one route is remembered */
+function learnPlannerRoutes(routes){
+ const d2s={};for(const id in ORDERS)(ORDERS[id]||[]).forEach(o=>{d2s[String(o.doc).trim()]=id});
+ const now=Date.now();let pairs=0,used=0;
+ for(const r of routes){const ids=[...new Set(r.docs.map(d=>d2s[String(d).trim()]).filter(Boolean))];if(ids.length<2)continue;used++;
+  for(let i=0;i<ids.length;i++)for(let j=i+1;j<ids.length;j++){const a=S[ids[i]],b=S[ids[j]];if(!a||!b||zkey(a)===zkey(b))continue;
+   const k=lkey(a,b);const e=LESS[k]||{n:0};e.n++;e.last=now;e.a=a.name;e.b=b.name;e.src='planner';LESS[k]=e;pairs++}}
+ lessSave();return {pairs,routes:used};}
+async function learnPlannerFile(file){
+ const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});const routes=[];
+ for(const sn of wb.SheetNames){const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null,blankrows:false});let cur=null;
+  for(const r of rows){const tag=(r||[]).find(c=>typeof c==='string'&&/^\s*ROUTE\s*\d/i.test(c));if(tag){cur={tag:tag.trim(),docs:[]};routes.push(cur)}
+   const d=r&&r[0];if(cur&&d!=null&&/^\s*(\d{6}|CA\d)/.test(String(d)))cur.docs.push(String(d).trim())}
+  if(routes.length)break;}
+ if(!routes.length)return {pairs:0,routes:0,none:true};
+ return learnPlannerRoutes(routes);}
 
 /* ---------- grouping into routes ---------- */
 function groupRoutes(stops,Pp,startN){
@@ -1006,12 +1036,12 @@ function addrCell(s){
  return esc(s.addr);}
 function noteChips(s){
  const lbl={noaddr:s.addrSrc==='order'?'Confirm address':'Add address',postal:'Add postal code',conflict:'Order and master differ'};
- const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location',night:'Night delivery',nocbm:'Volume missing: check',timeq:'Check the time in the remarks',split:s.split?('Load '+s.split.k+' of '+s.split.n+' (total '+s.split.total+' m³)'):'Split load'};
+ const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location',night:'Night delivery',remaddr:s.remPostal?('Remark address used ('+s.remPostal+'), not the master address'):'Remark address used',nocbm:'Volume missing: check',timeq:'Check the time in the remarks',split:s.split?('Load '+s.split.k+' of '+s.split.n+' (total '+s.split.total+' m³)'):'Split load'};
  let h='';
  for(const f of s.flags){
   if(REVIEW.includes(f)){const r=state.resolved[key(s.id,f)];
    h+=r?`<span class="chip ok">${r.book?'Saved address':'Confirmed'}</span>`:`<button class="chip btn" data-act="open" data-id="${s.id}">${lbl[f]}</button>`;}
-  else if(info[f])h+=`<span class="chip ${f==='newship'||f==='approx'||f==='nocbm'||f==='timeq'||f==='night'?'warn':'info'}">${info[f]}</span>`;}
+  else if(info[f])h+=`<span class="chip ${f==='newship'||f==='approx'||f==='nocbm'||f==='timeq'||f==='night'||f==='remaddr'?'warn':'info'}">${info[f]}</span>`;}
  return h;}
 function detail(s){
  let cols='';
@@ -1378,7 +1408,7 @@ function rulesCard(){
 function lessonsBox(){
  const ks=Object.keys(LESS).sort((a,b)=>LESS[b].last-LESS[a].last);
  const rows=ks.map(k=>{const e=LESS[k];const d=new Date(e.last).toISOString().slice(0,10);return `<tr><td class="nm">${esc(e.a)}<div class="sub">with ${esc(e.b)}</div></td><td class="num">${e.n}×</td><td class="nw">${esc(d)}</td><td><button class="link" data-act="unlearn" data-k="${esc(k)}">Remove</button></td></tr>`}).join('');
- return `<details id="ldet" style="padding:0 14px 8px"><summary class="sub" style="cursor:pointer">Moves the planner has learned from you (${ks.length})</summary>${ks.length?`<div class="sub" style="margin:6px 0">When you move a stop into a route, the planner keeps it with those stops next time if it stays on time, within 17:00 and within the vehicle. Saved on this computer for 60 days, renewed each time you repeat it.</div><div class="scroll"><table><thead><tr><th>Stop</th><th class="num">Times</th><th>Last</th><th></th></tr></thead><tbody>${rows}</tbody></table></div><div class="tb"><button class="btn ghost sm" data-act="unlearnall">Remove all</button></div>`:'<div class="sub" style="margin:6px 0">Nothing yet. Use Move to on a stop and it will be remembered here.</div>'}</details>`;}
+ return `<details id="ldet" style="padding:0 14px 8px"><summary class="sub" style="cursor:pointer">Moves the planner has learned from you (${ks.length})</summary><div class="sub" style="margin:6px 0">Teach it from your planners: choose the planners' file (the one with ROUTE 1, ROUTE 2 ... tags) for the orders now on screen. Stops they put on one route are kept together next time. <input type="file" id="lrnfile" accept=".xlsx,.xlsm,.xls" style="margin-left:6px"></div>${ks.length?`<div class="sub" style="margin:6px 0">When you move a stop into a route, the planner keeps it with those stops next time if it stays on time, within 17:00 and within the vehicle. Saved on this computer for 60 days, renewed each time you repeat it.</div><div class="scroll"><table><thead><tr><th>Stop</th><th class="num">Times</th><th>Last</th><th></th></tr></thead><tbody>${rows}</tbody></table></div><div class="tb"><button class="btn ghost sm" data-act="unlearnall">Remove all</button></div>`:'<div class="sub" style="margin:6px 0">Nothing yet. Use Move to on a stop and it will be remembered here.</div>'}</details>`;}
 async function replanAll(){
  const hasAppr=Object.keys(state.approved).some(k=>state.approved[k]);
  if(hasAppr&&!confirm('Re-planning replaces every route, including the ones you approved or sent to drivers. Continue?'))return;
@@ -1386,6 +1416,7 @@ async function replanAll(){
  toast('Re-planned with the current rules: '+plural(state.routes.length,'route')+'.');render();}
 document.addEventListener('toggle',ev=>{if(ev.target&&ev.target.id==='zdet')state.zopen=ev.target.open},true);
 document.addEventListener('change',ev=>{const t=ev.target;if(!t)return;
+ if(t.id==='lrnfile'&&t.files&&t.files[0]){const f=t.files[0];learnPlannerFile(f).then(async res=>{if(res.none){toast('No ROUTE tags found in that file.');return}toast('Learned '+plural(res.pairs,'pairing')+' from '+plural(res.routes,'planner route')+'. Re-planning with them now.');await replanAll();}).catch(()=>toast('That file could not be read.'));t.value='';return}
  if(t.id==='rl_names'){RULES.bigNames=t.value;rulesSave();render()}
  else if(t.id==='rl_cbm'){const v=parseFloat(String(t.value).replace(',','.'));RULES.bigCbm=isFinite(v)&&v>0?v:0;rulesSave();render()}
  else if(t.id==='rl_rs'){RULES.roadshow=t.checked;rulesSave();render()}
