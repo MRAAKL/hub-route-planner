@@ -511,7 +511,7 @@ async function geoStops(stops){
 
 /* ---------- planning rules: big orders and zones ---------- */
 const RKEY='hub_rules_v1',ZKEY='hub_zone_ov_v1';
-const RULES={bigNames:'Heap Seng, Sinma',noTrailer:'Teck Wah',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25,prioFirst:true,prioKm:15};
+const RULES={bigNames:'Heap Seng, Sinma',noTrailer:'',trailerLoads:99,bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25,prioFirst:true,prioKm:15};
 try{Object.assign(RULES,JSON.parse(localStorage.getItem(RKEY)||'{}'))}catch(e){}
 let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
 const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
@@ -563,13 +563,17 @@ let PLAN_LABEL='';
 /* a delivery bigger than the biggest vehicle is split into equal loads, each planned as its own trip */
 const SPLITCAP=14;
 function splitOversize(stops,orders){const out=[];const ords=Object.assign({},orders);
- const pm=state.units['Prime mover'];const hasPm=(pm===''||pm==null||+pm>0);const T=35;
+ const pm=state.units['Prime mover'];const hasPm=(pm===''||pm==null||+pm>0);
+ const tr=trailerTypes().filter(t=>/40/.test(t.name))[0];const T=tr?pv(tr):40;
  const P=(typeof fleetCap==='function'&&fleetCap(false))||14;
+ const trailerFrom=RULES.trailerLoads||4;/* a trailer only when the order would otherwise need this many 24 ft trucks */
  for(const s of stops){
   let sizes=null;
   const noTr=String(RULES.noTrailer||'').split(',').map(x=>norm(x)).filter(Boolean).some(b=>norm(s.name||'').includes(b));
-  if(hasPm&&!noTr){if(s.cbm>T){sizes=[];let rem=s.cbm;while(rem>T){sizes.push(P);rem-=P}sizes.unshift(rem)}}
-  else if(s.cbm>(noTr?P:SPLITCAP)){const n=Math.ceil(s.cbm/(noTr?P:SPLITCAP));sizes=Array(n).fill(s.cbm/n)}
+  const loads=Math.ceil(s.cbm/P-1e-9);
+  if(s.cbm>P){
+   if(hasPm&&!noTr&&loads>=trailerFrom){sizes=[];let rem=s.cbm;while(rem>T){sizes.push(P);rem-=P}sizes.unshift(rem)}
+   else sizes=Array(loads).fill(s.cbm/loads)}
   if(!sizes){out.push(s);continue}
   delete ords[s.id];const n=sizes.length;let used=0;
   for(let k=1;k<=n;k++){const p=clone(s);const c=k===n?Math.round((s.cbm-used)*1000)/1000:Math.round(sizes[k-1]*1000)/1000;used+=c;
@@ -600,7 +604,8 @@ async function learnPlannerFile(file){
 function groupRoutes(stops,Pp,startN){
  const routes=[];const P=Object.assign({dw:1,ww:.3,open:25,maxDur:420,zp:0,hop:0},Pp||{});
  for(const s of stops.slice().sort((a,b)=>(isPrio(b)-isPrio(a))||b.cbm-a.cbm)){let best=null,bs=Infinity;const big=isBig(s);
-  for(const rt of routes){if(big||rt.big||s.noloc||rt.seq.some(x=>x.noloc))continue;
+  for(const rt of routes){if(big||s.noloc||rt.seq.some(x=>x.noloc))continue;
+   if(rt.big&&!rt.seq.every(x=>km(x,s)<0.3))continue;/* a big order travels alone, except small orders for the very same shop */
    const trial=rt.seq.concat([s]);const cbm=trial.reduce((a,x)=>a+x.cbm,0);const cap=Math.min(fleetCap(trial.some(x=>x.maxH)),P.cap||1e9);if(cbm>cap+1e-9)continue;
    const seq=bestSeq(trial);const r=evalRoute(seq);if((P.hop&&maxHop(seq)>P.hop&&maxHop(seq)>maxHop(rt.seq)+1e-9)||r.late>0||r.dur>P.maxDur||(r.end>dEndOf(r)&&evalRoute(rt.seq).end<=DELIV_END))continue;
    const base=evalRoute(rt.seq);const sc=(r.dist-base.dist)*P.dw+(r.dur-base.dur-(r.dist-base.dist)*2.7)*P.ww+((P.zp&&s.zone&&!rt.seq.some(x=>!x.zone||x.zone===s.zone))?P.zp:0)-((!s.noloc&&rt.seq.some(x=>!x.noloc&&tied(x,s)))?500:0);
@@ -669,14 +674,17 @@ async function readFleetFile(f){
  }catch(e){return {error:'This file could not be read. Check that it is the filled-in Hub fleet master list (.xlsx).'}}}
 /* planning value of a type: lower or upper end of the practical range */
 const pv=t=>t.cbm?(state.plan==='hi'?t.cbm.hi:t.cbm.lo):null;
-const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).map(t=>t.name==='24 footer'?Object.assign({},t,{cbm:{lo:14,hi:18.5}}):t).sort((a,b)=>pv(a)-pv(b)):[];
-const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).map(t=>/40/.test(t.name)?Object.assign({},t,{cbm:{lo:Math.max(t.cbm.lo,35),hi:Math.max(t.cbm.hi,35)}}):t).sort((a,b)=>pv(a)-pv(b)):[];
-function fleetCap(height){const r=rigidTypes();const cap=r.length?pv(r[r.length-1]):12;return height?Math.min(cap,10):cap;}
+/* practical loads set by Hub (6 Nov): van 3.8; 14 ft 10 (11 only if stacked loosely); 24 ft 15-20 depending on SKU; 40 ft trailer 21 pallets, about 40 */
+const CAPS={'Van':{lo:3.5,hi:3.8},'14 footer':{lo:8,hi:10},'24 footer':{lo:15,hi:20}};
+const HEIGHT_OK=/^van/i;/* only vans are known to be under 2.6 m */
+const rigidTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='rigid'&&t.ac!==true&&t.cbm).map(t=>CAPS[t.name]?Object.assign({},t,{cbm:CAPS[t.name]}):t).sort((a,b)=>pv(a)-pv(b)):[];
+const trailerTypes=()=>state.fleet?state.fleet.types.filter(t=>t.kind==='trailer'&&t.ac!==true&&t.cbm).map(t=>/40/.test(t.name)?Object.assign({},t,{cbm:{lo:35,hi:40}}):t).sort((a,b)=>pv(a)-pv(b)):[];
+function fleetCap(height){const r=rigidTypes();const cap=r.length?pv(r[r.length-1]):12;if(!height)return cap;const v=r.find(t=>HEIGHT_OK.test(t.name));return v?pv(v):Math.min(cap,10);}
 function vehicleNeed(cbm,height){
  const r=rigidTypes();
  if(!r.length)return cbm<=12?'Truck (fleet list has no m³ yet)':null;
- const fit=r.find(t=>pv(t)>=cbm-1e-9&&(!height||pv(t)<=10||t===r[r.length-1]));
- if(fit&&!(height&&cbm>10))return fit.name+' (up to '+pv(fit)+' m³)'+(height?', under 2.6 m high':'');
+ const fit=r.find(t=>pv(t)>=cbm-1e-9&&(!height||HEIGHT_OK.test(t.name)));
+ if(fit)return fit.name+' (up to '+pv(fit)+' m³)'+(height?', under 2.6 m high':'');
  if(!height){const tr=trailerTypes().find(t=>pv(t)>=cbm-1e-9);if(tr)return tr.name+' with a prime mover (up to '+pv(tr)+' m³)';}
  return null;}
 
@@ -809,10 +817,10 @@ function assignTypes(veh){
  const take=nm=>{if(!(nm in left))return '';if(pool&&/^24/.test(nm)){left[nm]--;left['Hub drivers']--;return 'hub'}if(pool&&/^14/.test(nm)){if(left[nm]>0){left[nm]--;return 'sub'}left['Hub drivers']--;return 'hub'}left[nm]--;return ''};
  for(const v of veh.filter(v=>!v.unplaced).sort((a,b)=>(b.height?1:0)-(a.height?1:0)||b.cbm-a.cbm)){
   v.vt=null;v.tight=false;v.short=false;v.prime=false;v.src='';
-  const rg=rigidTypes().filter(t=>pv(t)>=v.cbm-1e-9&&!(v.height&&v.cbm>10));
+  const rg=rigidTypes().filter(t=>pv(t)>=v.cbm-1e-9&&(!v.height||HEIGHT_OK.test(t.name)));
   let pick=rg.find(t=>has(t.name));
   if(pick&&/^14/.test(pick.name)&&v.cbm<5&&pool&&hub()>0){const alt=rg.find(t=>/^24/.test(t.name)&&has(t.name));if(alt)pick=alt}
-  if(!pick&&!v.height){if(has('Prime mover'))pick=trailerTypes().find(t=>pv(t)>=v.cbm-1e-9);if(pick){v.prime=true;take('Prime mover')}}
+  if(!pick&&!v.height&&v.cbm>fleetCap(false)+1e-9){if(has('Prime mover'))pick=trailerTypes().find(t=>pv(t)>=v.cbm-1e-9);if(pick){v.prime=true;take('Prime mover')}}
   if(pick){if(!v.prime)v.src=take(pick.name);v.vt=pick.name+(v.prime?' with a prime mover':'')+(v.src==='sub'?' (subcontractor)':'');v.tight=!!(pick.cbm&&pick.kind==='rigid'&&v.cbm>pick.cbm.lo+1e-9&&pick.cbm.lo!==pick.cbm.hi);}
   else{v.short=true;v.want=vehicleNeed(v.cbm,v.height);}
  }}
@@ -962,14 +970,24 @@ async function build(){
  state.days=multi?{}:null;state.dayCur=null;const baseUnits=clone(state.units);
  for(let di=0;di<sets.length;di++){const d=sets[di];
   const fl=multi?sm.ok.map(f=>Object.assign({},f,{orders:f.orders.filter(o=>(o.date||dates[0])===d)})).filter(f=>f.orders.length):sm.ok;
-  const b=buildStops(fl);
-  S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
-  state.dateISO=d||dates[0]||new Date().toISOString().slice(0,10);
-  state.dateLabel=d?niceDate(d):(sm.dates.length?sm.dates.map(niceDate).join(' and '):'');
-  state.units=clone(baseUnits);
-  try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
-  PLAN_LABEL=multi?'day '+(di+1)+' of '+sets.length+' ('+niceDate(d)+')':'';
-  state.deferred=[];state.routes=await planDayAsync(b.stops);INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();
+  /* a trailer is only recommended for an order over one 24 ft load when the vans, 14 ft and 24 ft trucks are not enough */
+  let best=null;
+  for(const tl of [99,1]){
+   RULES.trailerLoads=tl;
+   const b=buildStops(fl);
+   S=Object.fromEntries(b.stops.map(s=>[s.id,s]));ORDERS=b.orders;
+   state.dateISO=d||dates[0]||new Date().toISOString().slice(0,10);
+   state.dateLabel=d?niceDate(d):(sm.dates.length?sm.dates.map(niceDate).join(' and '):'');
+   state.units=clone(baseUnits);
+   try{await geoStops(b.stops)}catch(e){state.geo={asked:0,placed:0,approx:0,missing:[],off:'The map look-up failed.'}}
+   PLAN_LABEL=multi?'day '+(di+1)+' of '+sets.length+' ('+niceDate(d)+')':'';
+   state.deferred=[];state.routes=await planDayAsync(b.stops);
+   let sh=0;try{sh=vehiclePlan().veh.filter(v=>v.short&&!v.unplaced).length}catch(e){}
+   const oversize=b.stops.some(x=>x.split);
+   if(!best||sh<best.sh)best={sh,S,ORDERS,routes:state.routes,units:clone(state.units),geo:state.geo,tl};
+   if(sh===0||!oversize)break;}
+  RULES.trailerLoads=99;S=best.S;ORDERS=best.ORDERS;state.routes=best.routes;state.units=best.units;state.geo=best.geo;
+  INITIAL=clone(state.routes);state.next=state.routes.length+1;state.approved={};state.resolved={};state.open=null;state.orders={};applyBook();
   if(multi){state.dayCur=d;daySave()}}
  PLAN_LABEL='';state.busy=false;
  if(multi){const t=sgToday();dayLoad(dates.includes(t)?t:dates[0])}
@@ -1042,7 +1060,7 @@ function analyse(rt){
  const pend=seq.reduce((a,s)=>a+pendingFlags(s).length,0);
  if(pend)why.push(plural(pend,'item')+' to confirm');
  e.legs.filter(l=>l.late>0&&!l.stop.noloc).forEach(l=>why.push(l.stop.name+' arrives '+Math.round(l.late)+' min late'));
- if(!need)why.push(height?'Over '+fleetCap(true)+' m³ with a 2.6 m height limit':'Over '+fleetCap(false)+' m³ and no trailer fits: split into 2 trips');
+ if(!need)why.push(height?'Over '+fleetCap(true)+' m³ (van size) with a 2.6 m height limit: split the route':'Over '+fleetCap(false)+' m³ and no trailer fits: split into 2 trips');
  return {seq,e,cbm,need,why};}
 function addrCell(s){
  const a=state.resolved[key(s.id,'noaddr')],p=state.resolved[key(s.id,'postal')];
