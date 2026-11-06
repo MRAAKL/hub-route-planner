@@ -349,12 +349,12 @@ const kb=n=>n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024)
 
 /* ---------- reading the Excel files ---------- */
 function t24(h,m,ap){h=+h;m=+(m||0);if(ap){ap=ap.toLowerCase();if(ap==='pm'&&h<12)h+=12;if(ap==='am'&&h===12)h=0;}return h*60+m;}
-const AVOID_RE=/(?:avoid(?:ing)?|except(?:\s+between)?|excluding|do\s*not\s+(?:deliver|send)(?:\s+(?:during|between))?|don'?t\s+(?:deliver|send)(?:\s+(?:during|between))?|no\s+deliver(?:y|ies)\s*(?:during|between)?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;
+const AVOID_RE=/(?:avoid(?:ing)?(?:\s+(?:lunch\s*(?:time|hours?)?|between|during))?\s*:?|except(?:\s+between)?|excluding|do\s*not\s+(?:deliver|send)(?:\s+(?:during|between))?|don'?t\s+(?:deliver|send)(?:\s+(?:during|between))?|no\s+deliver(?:y|ies)\s*(?:during|between)?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;
 function parseAvoid(txt){const t=String(txt||'').replace(/\s+/g,' ');AVOID_RE.lastIndex=0;const m=AVOID_RE.exec(t);if(!m)return null;let a=t24(m[1],m[2],m[3]||m[6]);const b=t24(m[4],m[5],m[6]);if(!m[3]&&a>=b)a=t24(m[1],m[2],'am');return b>a?[a,b]:null}
 function parseWin(txt){
  const t=String(txt||'').replace(/\s+/g,' ').replace(AVOID_RE,' ').replace(/sat(?:urday)?s?\s*(?:till|until|before|by)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/ig,'');
  const m=t.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)/i);
- if(m){const a=t24(m[1],m[2],m[3]||m[6]);let b=t24(m[4],m[5],m[6]);if(b<=a&&/am/i.test(m[6])&&+m[4]===12)b=720;if(b<=a&&!m[3]){const a2=t24(m[1],m[2],'am');if(b>a2)return [a2,b]}if(b>a)return [a,b];}
+ if(m){const a=t24(m[1],m[2],m[3]||m[6]);let b=t24(m[4],m[5],m[6]);if(b<=a&&/am/i.test(m[6])&&+m[4]===12)b=720;{let r=null;if(b<=a&&!m[3]){const a2=t24(m[1],m[2],'am');if(b>a2)r=[a2,b]}if(!r&&b>a)r=[a,b];if(r){const re2=/(?:before|by|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;let y,e=1e9;while((y=re2.exec(t)))e=Math.min(e,t24(y[1],y[2],y[3]));if(e<1e9&&e>r[0]&&e<r[1])r=[r[0],e];return r}}}
  const ends=[];const re=/(?:before|by|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/ig;let x;
  while((x=re.exec(t)))ends.push(t24(x[1],x[2],x[3]));
  if(ends.length)return [null,Math.min(...ends)];
@@ -402,7 +402,7 @@ function parseSheet(rows){
    if(doc==null||doc===''||typeof cbm!=='number')continue;
    const remarks=iRem>=0&&row[iRem]!=null?String(row[iRem]).trim():'';
    orders.push({doc:String(doc),code:iCode>=0?normCode(row[iCode]):null,name:String(row[iName]||'').replace(/\s+/g,' ').trim(),ref:iRef>=0?row[iRef]:'',date:fmtDate(iDate>=0?row[iDate]:''),remarks,qty:iQty>=0?+row[iQty]||0:0,cbm:Math.round(cbm*100000)/100000,
-    type:/^CA/i.test(String(doc))||/collect/i.test(remarks)?'Collection':'Delivery',cust:'GroupeSeb'});}
+    type:/^CA/i.test(String(doc))||/collect/i.test(remarks)||/\b(RTV|ERV)\b/i.test(String(row[iName]||''))?'Collection':'Delivery',cust:'GroupeSeb'});}
   fixDates0(orders);fixDates(orders);return orders;}
  return null;}
 function readAddrs(wb){
@@ -429,12 +429,19 @@ async function readFile(f){
  return entry;}
 
 /* ---------- stops from orders ---------- */
+/* a remark that sends one order somewhere else is shown as its own stop, so the customer's normal ship-to address is left alone */
+function remName(s,rem){if(s.remNamed)return;s.remNamed=true;const lab=/parc point/i.test(rem)?'Parc Point':String(s.addr||'').replace(/\s*\(from the remarks\)|\s*S\(\d{6}\)/g,'').replace(/\s+/g,' ').trim().slice(0,30);
+ if(lab)s.name=String(s.name||'').replace(/\s*\((?:HQ|Head ?office)\)\s*$/i,'')+' ('+lab+')';}
 function buildStops(files){
  const groups=new Map();
- files.filter(f=>f.status==='ok').forEach(f=>f.orders.forEach(o=>{const k=norm(o.name);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(o)}));
+ {const all=[];files.filter(f=>f.status==='ok').forEach(f=>f.orders.forEach(o=>all.push(o)));
+  /* one customer name can deliver to different places (e.g. Staff Purchases to the GSS office or to a shop): split by the place the remark names */
+  const dest=o=>{const r=String(o.remarks||'').replace(/\s+/g,' ');if(/\bgss\s*office\b/i.test(r))return 'gss';const m=r.match(/\bdeliver(?:y)?\s+(?:address\s*:?\s*)?to\s+(\d{1,4}[A-Za-z]?\s+[A-Za-z0-9' ]{2,30}?\s(?:road|rd|street|st|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place))\b/i);return m?norm(m[1]):''};
+  const tg=new Map();all.forEach(o=>{const n=norm(o.name);if(!tg.has(n))tg.set(n,new Set());tg.get(n).add(dest(o))});
+  all.forEach(o=>{const n=norm(o.name);const k=tg.get(n).size>1&&dest(o)?n+'|'+dest(o):n;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(o)});}
  const stops=[];let u=0;const orders={};
  for(const [k,os] of groups){
-  const tpl=KNOWN[k];const dels=os.filter(o=>o.type==='Delivery');
+  const tpl=KNOWN[k.split('|')[0]];const dels=os.filter(o=>o.type==='Delivery');
   let win=null;for(const o of (dels.length?dels:os)){const w=parseWin(o.remarks);if(w){win=w;break}}
   let avoid=null;for(const o of (dels.length?dels:os)){const w=parseAvoid(o.remarks);if(w){avoid=w;break}}
   const types=[...new Set(os.map(o=>o.type))];
@@ -460,7 +467,14 @@ function buildStops(files){
    while((mm=re.exec(rem))){const ctx=rem.slice(Math.max(0,mm.index-100),mm.index);if(docs.has(mm[1]))continue;if(/\b(do|po|inv|invoice|order|ref|doc)\W*#?\s*$/i.test(ctx))continue;
     if(/\b(road|rd|street|st|avenue|ave|drive|dr|lane|crescent|way|walk|central|boulevard|close|place|jalan|singapore|sg|deliver(?:y)? to|address)\b/i.test(ctx)){rp=mm[1];break}}
    const mp=postalOf(s)||(tpl&&postalOf(tpl))||'';
-   if(rp&&rp!==mp){s.noloc=true;s.lat=WH.lat;s.lng=WH.lng;{const am=rem.match(/\b\d{1,4}[A-Za-z]?\s+[A-Za-z0-9' ]{3,40}\b(?:road|rd|street|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place)\b.*/i);s.addr=(am?am[0]:rem).slice(0,150)+' S('+rp+')';}s.addrSrc='order';s.remPostal=rp;s.hint={cands:[{postal:rp,text:rem}]};s.flags=(s.flags||[]).filter(f=>f!=='newship'&&f!=='noaddr').concat(['remaddr']);}}
+   const gss=!rp&&(/\bgss\s*office\b/i.test(rem)||/^gss\s*office/i.test(s.name||''));if(gss)rp='534119';
+   let rt='';if(!rp){const dm=rem.match(/\bdeliver(?:y)?\s+(?:address\s*:?\s*)?to\s+(.{8,140}?)(?=\s+(?:before|by|between)\b|\.\s|$)/i);
+    const dv0=(dm&&/\b\d{1,4}[A-Za-z]?\s+[A-Za-z0-9' ]{2,40}\b(?:road|rd|street|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place)\b/i.test(dm[1]))?dm[1]:((rem.match(/\b(?:blk|block)\s+\d{1,4}[A-Za-z]?\s+[A-Za-z ]{3,40}?(?:road|rd|street|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place)\b/i)||[])[0]||null);
+    if(dv0){const dv=dv0.replace(/^(?:blk|block)\s+/i,'');
+     const key=((dv.match(/^(?:.*?,\s*)?(\d{1,4}[A-Za-z]?)\s+([A-Za-z]+)/)||[]).slice(1).join(' ')).toLowerCase();const ma=String(s.addr||(tpl&&tpl.addr)||'').toLowerCase().replace(/\s+/g,' ');
+     if(key&&!ma.includes(key)){rt=dv}}}
+   if(rt&&!rp){s.noloc=true;s.lat=WH.lat;s.lng=WH.lng;s.addr=rt+' (from the remarks)';s.addrSrc='order';s.remPostal='';s.hint={cands:[{postal:'',text:rt}]};s.flags=(s.flags||[]).filter(f=>f!=='newship'&&f!=='noaddr').concat(['remaddr']);remName(s,rem);}
+   if(rp&&rp!==mp){s.noloc=true;s.lat=WH.lat;s.lng=WH.lng;{const am=rem.match(/\b\d{1,4}[A-Za-z]?\s+[A-Za-z0-9' ]{3,40}\b(?:road|rd|street|avenue|ave|drive|lane|crescent|way|walk|central|boulevard|close|place)\b.*/i);s.addr=gss?'29 Tai Seng Avenue #06-01/02 Natural Cool Lifestyle Hub S(534119) (GSS office)':(am?am[0]:rem).slice(0,150)+' S('+rp+')';}s.addrSrc='order';s.remPostal=rp;s.hint={cands:[{postal:rp,text:rem}]};s.flags=(s.flags||[]).filter(f=>f!=='newship'&&f!=='noaddr').concat(['remaddr']);remName(s,rem);}}
   {const nm=os.map(o=>String(o.remarks||'').match(/time\s*[:\-]?\s*(\d{1,2})[:.]?(\d{2})?\s*pm\b/i)).find(Boolean);if(!s.win&&nm&&+nm[1]>=8&&+nm[1]<12){s.night=true;s.win=[(+nm[1]+12)*60+(+nm[2]||0),null];s.flags.push('night');}}
   if(os.some(o=>o.qty>0&&!(o.cbm>0)))s.flags.push('nocbm');
   if(!s.win&&!s.night&&os.some(o=>/\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)\b/i.test(o.remarks||'')))s.flags.push('timeq');
@@ -485,6 +499,7 @@ async function geoStops(stops){
  catch(e){state.geo.off='Could not reach the map look-up.';return}
  const upd=[];
  for(const s of need){let hit=null;for(let i=0;i<s.hint.cands.length&&!hit;i++)hit=out[s.id+'|'+i];
+  if(!hit&&/tengah/i.test(JSON.stringify(s.hint.cands))){hit={lat:1.3617,lng:103.7289,src:'area'};s.flags=(s.flags||[]).concat(['approx'])}
   if(!hit){state.geo.missing.push(s.name);continue}
   s.lat=hit.lat;s.lng=hit.lng;s.noloc=false;s.locSrc=hit.src;
   if(s.area==='Not on master list')s.area=prettyArea(s,hit);
@@ -496,7 +511,7 @@ async function geoStops(stops){
 
 /* ---------- planning rules: big orders and zones ---------- */
 const RKEY='hub_rules_v1',ZKEY='hub_zone_ov_v1';
-const RULES={bigNames:'Heap Seng, Sinma',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25,prioFirst:true,prioKm:15};
+const RULES={bigNames:'Heap Seng, Sinma',noTrailer:'Teck Wah',bigCbm:8,roadshow:true,zones:true,mix:true,mixKm:25,prioFirst:true,prioKm:15};
 try{Object.assign(RULES,JSON.parse(localStorage.getItem(RKEY)||'{}'))}catch(e){}
 let ZOV={};try{ZOV=JSON.parse(localStorage.getItem(ZKEY)||'{}')||{}}catch(e){}
 const rulesSave=()=>{try{localStorage.setItem(RKEY,JSON.stringify(RULES))}catch(e){}};
@@ -552,8 +567,9 @@ function splitOversize(stops,orders){const out=[];const ords=Object.assign({},or
  const P=(typeof fleetCap==='function'&&fleetCap(false))||14;
  for(const s of stops){
   let sizes=null;
-  if(hasPm){if(s.cbm>T){sizes=[];let rem=s.cbm;while(rem>T){sizes.push(P);rem-=P}sizes.unshift(rem)}}
-  else if(s.cbm>SPLITCAP){const n=Math.ceil(s.cbm/SPLITCAP);sizes=Array(n).fill(s.cbm/n)}
+  const noTr=String(RULES.noTrailer||'').split(',').map(x=>norm(x)).filter(Boolean).some(b=>norm(s.name||'').includes(b));
+  if(hasPm&&!noTr){if(s.cbm>T){sizes=[];let rem=s.cbm;while(rem>T){sizes.push(P);rem-=P}sizes.unshift(rem)}}
+  else if(s.cbm>(noTr?P:SPLITCAP)){const n=Math.ceil(s.cbm/(noTr?P:SPLITCAP));sizes=Array(n).fill(s.cbm/n)}
   if(!sizes){out.push(s);continue}
   delete ords[s.id];const n=sizes.length;let used=0;
   for(let k=1;k<=n;k++){const p=clone(s);const c=k===n?Math.round((s.cbm-used)*1000)/1000:Math.round(sizes[k-1]*1000)/1000;used+=c;
@@ -1036,7 +1052,7 @@ function addrCell(s){
  return esc(s.addr);}
 function noteChips(s){
  const lbl={noaddr:s.addrSrc==='order'?'Confirm address':'Add address',postal:'Add postal code',conflict:'Order and master differ'};
- const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location',night:'Night delivery',remaddr:s.remPostal?('Remark address used ('+s.remPostal+'), not the master address'):'Remark address used',nocbm:'Volume missing: check',timeq:'Check the time in the remarks',split:s.split?('Load '+s.split.k+' of '+s.split.n+' (total '+s.split.total+' m³)'):'Split load'};
+ const info={mixed:'Delivery + collection',slot:'Fixed slot',height:'Max '+(s.maxH||2.6)+' m high',call:'Call ahead',coll:'Collection',newship:'New ship-to',approx:'Approx. location',night:'Night delivery',remaddr:s.remPostal?('Remark address used ('+s.remPostal+'), not the master address'):'Remark address used, not the master address',nocbm:'Volume missing: check',timeq:'Check the time in the remarks',split:s.split?('Load '+s.split.k+' of '+s.split.n+' (total '+s.split.total+' m³)'):'Split load'};
  let h='';
  for(const f of s.flags){
   if(REVIEW.includes(f)){const r=state.resolved[key(s.id,f)];
